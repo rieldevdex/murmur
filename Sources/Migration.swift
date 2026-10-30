@@ -8,6 +8,11 @@ enum Migration {
     private static let doneKey = "migratedFromVisualiser"
 
     static func run() {
+        moveFromVisualiser()
+        clearLyricMisses()
+    }
+
+    private static func moveFromVisualiser() {
         let d = UserDefaults.standard
         guard !d.bool(forKey: doneKey) else { return }
         defer { d.set(true, forKey: doneKey) }
@@ -35,6 +40,21 @@ enum Migration {
                     try? fm.moveItem(at: from.appendingPathComponent(name), to: to.appendingPathComponent(name))
                 }
             }
+        }
+    }
+
+    /// Earlier versions remembered "no lyrics" forever, even after a server hiccup. Forget those
+    /// once, so every song gets looked up again with the better search.
+    private static func clearLyricMisses() {
+        let d = UserDefaults.standard
+        let key = "lyricMissesCleared1"
+        guard !d.bool(forKey: key) else { return }
+        d.set(true, forKey: key)
+        let fm = FileManager.default
+        let dir = DiskCache.folder("Lyrics")
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return }
+        for url in files where ((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 1) == 0 {
+            try? fm.removeItem(at: url)
         }
     }
 }

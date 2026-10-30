@@ -389,52 +389,23 @@ final class NowPlaying: ObservableObject {
         }
         guard !title.isEmpty, !artist.isEmpty, key.hasPrefix("spotify:track:") else { return }
 
-        // Saved from an earlier play: works offline (an empty file means "this song has no lyrics")
+        // Saved from an earlier play: works offline. An empty file means "no lyrics found"; that's
+        // trusted for 3 days, then asked again, since songs get added to LRCLIB all the time
         if let saved = DiskCache.read("Lyrics", key), let text = String(data: saved, encoding: .utf8) {
-            let parsed = Self.parseLRC(text)
-            lyricsCache[key] = parsed
-            if key == lastTrack { lyrics = parsed }
-            return
-        }
-
-        var found: String?
-        var reachable = false
-
-        // 1. Exact match on title, artist, album and length
-        var exact = URLComponents(string: "https://lrclib.net/api/get")!
-        exact.queryItems = [
-            URLQueryItem(name: "track_name", value: title),
-            URLQueryItem(name: "artist_name", value: artist),
-            URLQueryItem(name: "album_name", value: album)
-        ]
-        if duration > 0 { exact.queryItems?.append(URLQueryItem(name: "duration", value: String(Int(duration.rounded())))) }
-        let first = await fetchJSON(exact.url)
-        reachable = first.reachable
-        if let json = first.json as? [String: Any] {
-            found = json["syncedLyrics"] as? String
-        }
-
-        // 2. Otherwise search, and take the first synced result of about the right length
-        if found == nil {
-            var search = URLComponents(string: "https://lrclib.net/api/search")!
-            search.queryItems = [
-                URLQueryItem(name: "track_name", value: title),
-                URLQueryItem(name: "artist_name", value: artist)
-            ]
-            let second = await fetchJSON(search.url)
-            reachable = reachable || second.reachable
-            if let results = second.json as? [[String: Any]] {
-                let match = results.first(where: { item in
-                    guard item["syncedLyrics"] as? String != nil else { return false }
-                    guard duration > 0, let d = (item["duration"] as? NSNumber)?.doubleValue else { return true }
-                    return abs(d - duration) < 4
-                })
-                found = match?["syncedLyrics"] as? String
+            let missAge = Date().timeIntervalSince(DiskCache.modified("Lyrics", key) ?? .distantPast)
+            if !text.isEmpty || missAge < 3 * 86400 {
+                let parsed = Self.parseLRC(text)
+                lyricsCache[key] = parsed
+                if key == lastTrack { lyrics = parsed }
+                return
             }
         }
 
-        // Offline: remember nothing, so it's tried again when the connection comes back
-        guard reachable else { return }
+        let result = await Self.findLyrics(title: title, artist: artist, album: album, duration: duration)
+
+        // Offline or the server had trouble: remember nothing, so it's tried again later
+        guard result.answered else { return }
+        let found = result.lrc
 
         let parsed = found.map(Self.parseLRC) ?? []
         DiskCache.write(Data((found ?? "").utf8), "Lyrics", key)
@@ -443,14 +414,84 @@ final class NowPlaying: ObservableObject {
         if key == lastTrack { lyrics = parsed }
     }
 
-    /// `reachable` is false when the server couldn't be reached at all (offline), as opposed to
-    /// answering "not found"
-    private func fetchJSON(_ url: URL?) async -> (json: Any?, reachable: Bool) {
+    /// Tries several ways to find a song's synced lyrics on LRCLIB, from most to least exact.
+    /// `answered` is true only if every request got a proper answer (found or genuinely not found),
+    /// so a slow or failing server never gets remembered as "this song has no lyrics".
+    static func findLyrics(title: String, artist: String, album: String,
+                           duration: Double) async -> (lrc: String?, answered: Bool) {
+        var answered = true
+        let clean = cleanTitle(title)
+        let seconds = duration > 0 ? String(Int(duration.rounded())) : nil
+
+        func get(_ t: String, album: String?) async -> String? {
+            var c = URLComponents(string: "https://lrclib.net/api/get")!
+            c.queryItems = [URLQueryItem(name: "track_name", value: t),
+                            URLQueryItem(name: "artist_name", value: artist)]
+            if let a = album, !a.isEmpty { c.queryItems?.append(URLQueryItem(name: "album_name", value: a)) }
+            if let s = seconds { c.queryItems?.append(URLQueryItem(name: "duration", value: s)) }
+            let r = await fetchJSON(c.url)
+            if !r.answered { answered = false }
+            return (r.json as? [String: Any])?["syncedLyrics"] as? String
+        }
+
+        func search(_ items: [URLQueryItem]) async -> String? {
+            var c = URLComponents(string: "https://lrclib.net/api/search")!
+            c.queryItems = items
+            let r = await fetchJSON(c.url)
+            if !r.answered { answered = false }
+            return best(r.json as? [[String: Any]] ?? [], duration: duration)
+        }
+
+        // 1. Exact matches (title, artist, length; with and without the album)
+        if let l = await get(title, album: album) { return (l, true) }
+        if let l = await get(title, album: nil) { return (l, true) }
+        // 2. Search by title and artist, then with "(feat. …)" / " - Remastered" removed
+        if let l = await search([URLQueryItem(name: "track_name", value: title),
+                                 URLQueryItem(name: "artist_name", value: artist)]) { return (l, true) }
+        if clean != title, let l = await search([URLQueryItem(name: "track_name", value: clean),
+                                                 URLQueryItem(name: "artist_name", value: artist)]) { return (l, true) }
+        // 3. A free-text search, for songs filed under a slightly different artist name
+        if let l = await search([URLQueryItem(name: "q", value: "\(clean) \(artist)")]) { return (l, true) }
+        return (nil, answered)
+    }
+
+    /// The synced result closest in length to the song (within 8 s); any synced one if the length is unknown
+    private static func best(_ results: [[String: Any]], duration: Double) -> String? {
+        let synced = results.compactMap { item -> (String, Double?)? in
+            guard let lrc = item["syncedLyrics"] as? String, !lrc.isEmpty else { return nil }
+            return (lrc, (item["duration"] as? NSNumber)?.doubleValue)
+        }
+        guard duration > 0 else { return synced.first?.0 }
+        return synced
+            .compactMap { lrc, d -> (String, Double)? in
+                guard let d = d else { return nil }
+                let gap = abs(d - duration)
+                return gap <= 8 ? (lrc, gap) : nil
+            }
+            .min { $0.1 < $1.1 }?.0
+    }
+
+    /// "Song (feat. Someone) - 2011 Remaster" → "Song"
+    static func cleanTitle(_ title: String) -> String {
+        var t = title
+        for pattern in [#"\s*[\(\[](feat\.?|ft\.?|with|from)\s[^\)\]]*[\)\]]"#,
+                        #"\s+-\s+.*$"#] {
+            t = t.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        t = t.trimmingCharacters(in: .whitespaces)
+        return t.isEmpty ? title : t
+    }
+
+    /// `answered` is false when the server couldn't be reached or had a problem (offline, timeout,
+    /// rate limit, server error), as opposed to a clear "found" or "not found"
+    private static func fetchJSON(_ url: URL?) async -> (json: Any?, answered: Bool) {
         guard let url = url else { return (nil, false) }
-        var request = URLRequest(url: url, timeoutInterval: 8)
+        var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("Murmur/1.2 (+https://github.com/rieldevdex/Murmur)", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return (nil, false) }
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return (nil, true) }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode else { return (nil, false) }
+        if status == 404 { return (nil, true) }
+        guard status == 200 else { return (nil, false) }
         return (try? JSONSerialization.jsonObject(with: data), true)
     }
 
@@ -535,6 +576,11 @@ enum DiskCache {
 
     static func read(_ folderName: String, _ key: String) -> Data? {
         try? Data(contentsOf: file(folderName, key))
+    }
+
+    /// When an entry was saved
+    static func modified(_ folderName: String, _ key: String) -> Date? {
+        (try? file(folderName, key).resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
     static func write(_ data: Data, _ folderName: String, _ key: String) {
