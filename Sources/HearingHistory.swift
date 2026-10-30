@@ -421,7 +421,7 @@ struct HearingHistoryView: View {
 
     private var footnote: some View {
         HStack(alignment: .top) {
-            Text("Levels are estimates from Visualiser (calibrate them in Settings › Extras). This tracks how much and how loud you listen, not your hearing itself: for that, AirPods Pro 2 and later can do Apple's Hearing Test on your iPhone (Settings › your AirPods › Take a Hearing Test). Kept on this Mac only.")
+            Text("Levels are estimates from Murmur (calibrate them in Settings › Extras). This tracks how much and how loud you listen, not your hearing itself: for that, AirPods Pro 2 and later can do Apple's Hearing Test on your iPhone (Settings › your AirPods › Take a Hearing Test). Kept on this Mac only.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(Color.white.opacity(0.4))
                 .fixedSize(horizontal: false, vertical: true)

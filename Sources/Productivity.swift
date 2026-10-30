@@ -505,7 +505,7 @@ final class ClipboardStore: ObservableObject {
 
     private static let folder: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let url = base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Visualiser", isDirectory: true)
+        let url = base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Murmur", isDirectory: true)
             .appendingPathComponent("Clipboard", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url

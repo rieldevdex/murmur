@@ -203,8 +203,8 @@ final class WindowModes: NSObject, NSMenuDelegate {
     private func addStatusItem() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Visualiser")
-        item.button?.toolTip = "Visualiser wallpaper"
+        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Murmur")
+        item.button?.toolTip = "Murmur wallpaper"
 
         let menu = NSMenu()
         menu.delegate = self
@@ -226,7 +226,7 @@ final class WindowModes: NSObject, NSMenuDelegate {
         back.target = self
         menu.addItem(back)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit Visualiser", action: #selector(quitApp), keyEquivalent: "")
+        let quit = NSMenuItem(title: "Quit Murmur", action: #selector(quitApp), keyEquivalent: "")
         quit.target = self
         menu.addItem(quit)
 
@@ -481,18 +481,18 @@ final class NotchOnlyMode: NSObject {
         guard item == nil else { return }
         let i = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         i.button?.image = NSImage(systemSymbolName: "rectangle.topthird.inset.filled",
-                                  accessibilityDescription: "Visualiser")
-        i.button?.toolTip = "Visualiser (Notch Only)"
+                                  accessibilityDescription: "Murmur")
+        i.button?.toolTip = "Murmur (Notch Only)"
 
         let menu = NSMenu()
-        let open = NSMenuItem(title: "Show Visualiser Window", action: #selector(showWindow), keyEquivalent: "")
+        let open = NSMenuItem(title: "Open Murmur", action: #selector(showWindow), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit Visualiser", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Murmur", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
         i.menu = menu

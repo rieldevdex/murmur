@@ -2,35 +2,35 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDisplayName</key>
-	<string>Visualiser</string>
-	<key>CFBundleExecutable</key>
-	<string>Visualiser</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.visualiser.app</string>
-	<key>CFBundleName</key>
-	<string>Visualiser</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.1</string>
-	<key>CFBundleVersion</key>
-	<string>2</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>Visualiser asks Spotify for the current track so it can show it as soon as the app opens.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Visualiser shows a short animation in the notch when your AirPods or other headphones connect.</string>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Visualiser shows your next event in its morning greeting.</string>
-	<key>NSCalendarsUsageDescription</key>
-	<string>Visualiser shows your next event in its morning greeting.</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Visualiser listens to a test tone through the built-in microphone to measure how loud your AirPods play at each volume. Nothing is recorded or kept.</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.rieldevdex.murmur</string>
+    <key>CFBundleName</key>
+    <string>Murmur</string>
+    <key>CFBundleDisplayName</key>
+    <string>Murmur</string>
+    <key>CFBundleExecutable</key>
+    <string>Murmur</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.1</string>
+    <key>CFBundleVersion</key>
+    <string>2</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Murmur shows a short animation in the notch when your AirPods or other headphones connect.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Murmur shows your next event in its morning greeting.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Murmur shows your next event in its morning greeting.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Murmur listens to a test tone through your Mac's microphone to measure how loud your AirPods play at each volume. Nothing is recorded or kept.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Murmur asks Spotify for the current track so it can show it as soon as the app opens.</string>
 </dict>
 </plist>

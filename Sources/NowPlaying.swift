@@ -448,7 +448,7 @@ final class NowPlaying: ObservableObject {
     private func fetchJSON(_ url: URL?) async -> (json: Any?, reachable: Bool) {
         guard let url = url else { return (nil, false) }
         var request = URLRequest(url: url, timeoutInterval: 8)
-        request.setValue("Visualiser 1.2 (personal macOS music visualiser)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Murmur/1.2 (+https://github.com/rieldevdex/Murmur)", forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await URLSession.shared.data(for: request) else { return (nil, false) }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { return (nil, true) }
         return (try? JSONSerialization.jsonObject(with: data), true)
@@ -519,7 +519,7 @@ enum MediaRemote {
 enum DiskCache {
     static let root: URL = {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Visualiser", isDirectory: true)
+        return base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Murmur", isDirectory: true)
     }()
 
     static func folder(_ name: String) -> URL {

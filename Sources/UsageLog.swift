@@ -18,7 +18,7 @@ final class UsageLog {
 
     static let folder: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let url = base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Visualiser", isDirectory: true)
+        let url = base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Murmur", isDirectory: true)
             .appendingPathComponent("UsageLog", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
@@ -198,7 +198,7 @@ final class UsageLog {
         }
 
         guard !minutes.isEmpty else {
-            return "Visualiser usage report: no data yet. Turn on the usage log in Settings › System and use your Mac for a while."
+            return "Murmur usage report: no data yet. Turn on the usage log in Settings › System and use your Mac for a while."
         }
 
         func gb(_ mb: Double) -> String { mb >= 1024 ? String(format: "%.1f GB", mb / 1024) : "\(Int(mb.rounded())) MB" }

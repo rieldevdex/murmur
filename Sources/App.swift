@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct VisualiserApp: App {
+struct MurmurApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage("look") private var lookIndex = 0
     @AppStorage("styleIndex") private var styleIndex = 1
@@ -39,6 +39,8 @@ struct VisualiserApp: App {
     @StateObject private var np = NowPlaying()
 
     init() {
+        // Brings over settings and data from when the app was called Visualiser (once)
+        Migration.run()
         // Needed when launched with `swift run`; harmless inside the .app bundle
         let startInNotch = UserDefaults.standard.bool(forKey: "notchOnly")
         NSApplication.shared.setActivationPolicy(startInNotch ? .accessory : .regular)
@@ -54,7 +56,7 @@ struct VisualiserApp: App {
 
     var body: some Scene {
         // A single window, so ⌘N can't start a second audio capture
-        Window("Visualiser", id: "main") { ContentView(tap: tap, np: np) }
+        Window("Murmur", id: "main") { ContentView(tap: tap, np: np) }
             .windowStyle(.hiddenTitleBar)
             .commands {
                 CommandGroup(replacing: .appSettings) {

@@ -1,15 +1,15 @@
 #!/bin/bash
-# Builds Visualiser.app next to this script.
-# Run from Terminal:  ./build-app.sh   then   open Visualiser.app
+# Builds Murmur.app next to this script.
+# Run from Terminal:  ./build-app.sh   then   open Murmur.app
 set -euo pipefail
 cd "$(dirname "$0")"
 
 swift build -c release
 
-APP="Visualiser.app"
+APP="Murmur.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Visualiser "$APP/Contents/MacOS/Visualiser"
+cp .build/release/Murmur "$APP/Contents/MacOS/Murmur"
 cp Info.plist "$APP/Contents/Info.plist"
 
 # App icon: turn Icon.png (1024 x 1024) into the .icns file macOS expects.
@@ -30,8 +30,12 @@ fi
 # app's signature. An ad-hoc signature changes with every build, so permissions reset each time.
 # A signing certificate of your own keeps the signature the same, so they're kept. To make one
 # (once): Keychain Access › Certificate Assistant › Create a Certificate…, name it
-# "Visualiser Signing", Identity Type "Self Signed Root", Certificate Type "Code Signing".
-IDENTITY="Visualiser Signing"
+# "Murmur Signing", Identity Type "Self Signed Root", Certificate Type "Code Signing".
+IDENTITY="Murmur Signing"
+# A certificate made under the app's old name works too
+if ! security find-identity -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
+    IDENTITY="Visualiser Signing"
+fi
 if security find-identity -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
     codesign --force --sign "$IDENTITY" "$APP"
     echo "Signed with \"$IDENTITY\" (permissions will be kept between builds)"

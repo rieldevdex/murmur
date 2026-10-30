@@ -516,7 +516,7 @@ final class NotchController {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 self.show(.message(symbol: "rectangle.topthird.inset.filled",
-                                   title: "Visualiser is in the notch",
+                                   title: "Murmur is in the notch",
                                    subtitle: "Click here for controls · open the app again for the window"),
                           for: 4.5)
             }
@@ -1625,7 +1625,7 @@ struct NotchIslandView: View {
                 NotchController.shared.collapse()
                 SettingsWindow.shared.show()
             }
-            Button("Open Visualiser") {
+            Button("Open Murmur") {
                 NotchController.shared.collapse()
                 WindowModes.shared.showMainWindow()
             }

@@ -45,7 +45,7 @@ final class HearingMonitor: ObservableObject {
 
     private static let file: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Visualiser", isDirectory: true)
+        let dir = base.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Murmur", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("hearing.json")
     }()

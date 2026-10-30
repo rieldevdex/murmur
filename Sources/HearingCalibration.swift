@@ -97,7 +97,7 @@ final class CurveCalibrator: ObservableObject {
             Task { @MainActor in
                 let me = CurveCalibrator.shared
                 guard granted else {
-                    me.phase = .failed("Visualiser needs the microphone for this. Allow it in System Settings › Privacy & Security › Microphone.")
+                    me.phase = .failed("Murmur needs the microphone for this. Allow it in System Settings › Privacy & Security › Microphone.")
                     return
                 }
                 me.startTone()
@@ -557,7 +557,7 @@ struct CalibrationView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Measure your AirPods' volume curve")
                 .font(.title3.weight(.semibold))
-            Text("This teaches Visualiser how much quieter each volume step really is on your AirPods, using your Mac's microphone. Each run takes about two minutes; two or three runs on different occasions make it reliable.")
+            Text("This teaches Murmur how much quieter each volume step really is on your AirPods, using your Mac's microphone. Each run takes about two minutes; two or three runs on different occasions make it reliable.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

@@ -308,7 +308,7 @@ struct StatusOverlay: View {
         case .waitingForSpotify:
             return "Open Spotify and press play."
         case .needsPermission:
-            return "Turn on Visualiser under Privacy & Security › Screen Recording, then reopen the app."
+            return "Turn on Murmur under Privacy & Security › Screen Recording, then reopen the app."
         case .failed(let message):
             return "\(message)\nRetrying…"
         default:

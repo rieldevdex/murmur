@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Visualiser",
+    name: "Murmur",
     platforms: [.macOS(.v13)],
-    targets: [.executableTarget(name: "Visualiser", path: "Sources")]
+    targets: [.executableTarget(name: "Murmur", path: "Sources")]
 )

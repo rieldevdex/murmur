@@ -180,7 +180,7 @@ struct AppearanceSettings: View {
                     Text("Punchy")
                 }
             } header: {
-                Text("Visualiser")
+                Text("Murmur")
             } footer: {
                 Text((Look(rawValue: lookIndex) ?? .classic).blurb)
                     .foregroundStyle(.secondary)
@@ -258,7 +258,7 @@ struct NotchSettings: View {
                     Toggle("Show lyrics", isOn: $lyrics)
                     Toggle(isOn: $allSpaces) {
                         Text("Stay put when switching Spaces, and on the Lock Screen")
-                        Text("Keeps the island still during three-finger swipes and shows it while your Mac is locked. Turning this off takes effect the next time Visualiser opens.")
+                        Text("Keeps the island still during three-finger swipes and shows it while your Mac is locked. Turning this off takes effect the next time Murmur opens.")
                     }
                     .onChange(of: allSpaces) { on in
                         if on { NotchController.shared.adoptSkyLight() }
@@ -300,7 +300,7 @@ struct NotchSettings: View {
                     Text("Activities")
                 } footer: {
                     if hud && replaceHUD && !MediaKeyTap.trusted {
-                        Text("Hiding the macOS indicator needs Accessibility permission. Turn on Visualiser in System Settings › Privacy & Security › Accessibility; it starts working straight away.")
+                        Text("Hiding the macOS indicator needs Accessibility permission. Turn on Murmur in System Settings › Privacy & Security › Accessibility; it starts working straight away.")
                             .foregroundStyle(.orange)
                     } else {
                         Text("Drag files onto the notch to keep them on the shelf. Nothing is copied or moved.")
@@ -451,7 +451,7 @@ struct AdvancedSettings: View {
                 Text("Permissions")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("After rebuilding the app, macOS may forget these. If something stops working, switch Visualiser off and on again in that list.")
+                    Text("After rebuilding the app, macOS may forget these. If something stops working, switch Murmur off and on again in that list.")
                     if let tap = AudioTap.current, tap.recoveries > 0 {
                         Text("Audio capture restarted itself \(tap.recoveries) time\(tap.recoveries == 1 ? "" : "s") since launch (last \(tap.lastRecovery ?? "")).")
                     }
@@ -517,7 +517,7 @@ struct SystemSettings: View {
                 }
                 Toggle(isOn: $usageLogSites) {
                     Text("Include which sites are open in Safari")
-                    Text("Every 5 minutes, just the site names (like notion.so), never full addresses. macOS asks once to let Visualiser read Safari.")
+                    Text("Every 5 minutes, just the site names (like notion.so), never full addresses. macOS asks once to let Murmur read Safari.")
                 }
                 .disabled(!usageLog)
                 HStack {

@@ -1,8 +1,8 @@
-# Visualiser
+# Murmur
 
 A music visualiser for macOS that lives in your MacBook's notch.
 
-Visualiser listens to what your Mac is playing and turns it into moving bars, glows and colours taken from the album art. It runs in its own window, as a live wallpaper, or inside a Dynamic-Island-style island around the notch. The island also carries a set of small everyday tools.
+Murmur listens to what your Mac is playing and turns it into moving bars, glows and colours taken from the album art. It runs in its own window, as a live wallpaper, or inside a Dynamic-Island-style island around the notch. The island also carries a set of small everyday tools.
 
 <!-- Add screenshots or a short GIF here, e.g. ![The island](docs/island.gif) -->
 
@@ -45,20 +45,20 @@ It has mostly been tested on a MacBook Air (M2). Other notch sizes, external dis
 ## Building
 
 ```bash
-git clone https://github.com/rieldevdex/Visualiser.git
-cd Visualiser
+git clone https://github.com/rieldevdex/Murmur.git
+cd Murmur
 ./build-app.sh
-open Visualiser.app
+open Murmur.app
 ```
 
-Move `Visualiser.app` to `/Applications` if you want to keep it.
+Move `Murmur.app` to `/Applications` if you want to keep it.
 
 ### Keeping permissions between builds
 
 macOS remembers permissions by an app's signature. Without a certificate, each build is signed ad hoc and macOS asks for permissions again. To avoid that, make a signing certificate once:
 
 1. Open **Keychain Access** and choose **Keychain Access › Certificate Assistant › Create a Certificate…**
-2. Name it `Visualiser Signing`, set **Identity Type** to *Self Signed Root* and **Certificate Type** to *Code Signing*.
+2. Name it `Murmur Signing`, set **Identity Type** to *Self Signed Root* and **Certificate Type** to *Code Signing*.
 3. Rebuild. `build-app.sh` uses the certificate automatically when it finds it.
 
 ## Permissions
@@ -71,17 +71,17 @@ macOS remembers permissions by an app's signature. Without a certificate, each b
 | Microphone | Only during headphone calibration, to measure a test tone |
 | Calendars | Only if you turn on the calendar greeting |
 
-Everything stays on your Mac. Visualiser has no account, no analytics and no server of its own. It only goes online to fetch artwork, artists, lyrics and weather (see below).
+Everything stays on your Mac. Murmur has no account, no analytics and no server of its own. It only goes online to fetch artwork, artists, lyrics and weather (see below).
 
 ## Third-party services
 
-Visualiser is an unofficial, independent project. It is not affiliated with or endorsed by Apple or Spotify.
+Murmur is an unofficial, independent project. It is not affiliated with or endorsed by Apple or Spotify.
 
 - [LRCLIB](https://lrclib.net) for synced lyrics
 - [Open-Meteo](https://open-meteo.com) for weather (data under CC BY 4.0)
 - Spotify's public oEmbed endpoint and track pages for artwork and the full artist list
 
-Visualiser also uses some private macOS frameworks (for example, to stay above the Lock Screen and read media and sensor information). They make it ineligible for the Mac App Store, and a macOS update may break them. Most have a fallback, so the rest of the app keeps working.
+Murmur also uses some private macOS frameworks (for example, to stay above the Lock Screen and read media and sensor information). They make it ineligible for the Mac App Store, and a macOS update may break them. Most have a fallback, so the rest of the app keeps working.
 
 ## Hearing disclaimer
 
@@ -91,6 +91,6 @@ The dB reading is an **estimate for awareness only**. It is not a medical device
 
 Copyright © 2026 Devony
 
-Visualiser is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
+Murmur is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
 
 This means anyone may use, study, change and share it. Anyone who distributes a modified version must release it under the same licence, with its source code.
