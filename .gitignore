@@ -1,0 +1,20 @@
+# Build output
+.build/
+*.app
+*.zip
+*.dmg
+
+# Xcode / SwiftPM extras
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# Signing material: never commit these
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+
+# macOS
+.DS_Store
