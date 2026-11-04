@@ -224,6 +224,9 @@ final class SystemMonitor: ObservableObject {
     private var lastNetTime: Date?
     private var netRates: [pid_t: (down: Double, up: Double)] = [:]
     private var nettopRunning = false
+    private var nettopFailures = 0
+    /// Set when per-app network can't be read (shown instead of "Measuring…")
+    @Published private(set) var networkPerAppProblem: String?
     private var pathMonitor: NWPathMonitor?
     private var lastInternetCheck = Date.distantPast
     private var lastTicks: (busy: UInt64, total: UInt64)?
@@ -239,6 +242,7 @@ final class SystemMonitor: ObservableObject {
     private var pressureSince: Date?
     private var batteryWarned: Set<Int> = []
     private var heatWarned = false
+    private var hotSince: Date?
 
     private init() {
         var tb = mach_timebase_info_data_t()
@@ -360,7 +364,14 @@ final class SystemMonitor: ObservableObject {
             if Date().timeIntervalSince(lastInternetCheck) > 20 { checkInternet() }
             record()
         }
-        if alerts { checkAlerts() }
+        if alerts {
+            // The chip's own temperature, so heat is caught even while the System tab is closed
+            // (cheap: one read of the sensors every 5 s)
+            if !detail, UserDefaults.standard.object(forKey: "sysAlertHeat") as? Bool ?? true {
+                temperature = temps.read()
+            }
+            checkAlerts()
+        }
         if UsageLog.enabled, Date().timeIntervalSince(lastLogged) >= 60 {
             lastLogged = Date()
             UsageLog.shared.record(apps: usage, memoryUsed: memoryUsed, pressure: pressure, cpu: cpu)
@@ -633,7 +644,13 @@ final class SystemMonitor: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.nettopRunning = false
-                guard let rows = rows else { return }
+                guard let rows = rows else {
+                    self.nettopFailures += 1
+                    if self.nettopFailures >= 3 { self.networkPerAppProblem = Self.lastNettopProblem ?? "nettop gave no data" }
+                    return
+                }
+                self.nettopFailures = 0
+                self.networkPerAppProblem = nil
                 let now = Date()
                 var rates: [pid_t: (down: Double, up: Double)] = [:]
                 if let last = self.lastNetTime {
@@ -677,6 +694,15 @@ final class SystemMonitor: ObservableObject {
         }
     }
 
+    /// Why per-app network couldn't be read, for the System tab (and for diagnosing)
+    static var lastNettopProblem: String?
+
+    /// "Safari.123" yes; "22:50:01.123456" (the time) no; "1234" no
+    private static func isNameAndPID(_ f: String) -> Bool {
+        guard !f.contains(":"), let dot = f.lastIndex(of: "."), dot != f.startIndex else { return false }
+        return Int(f[f.index(after: dot)...]) != nil
+    }
+
     static func runNettop() -> [pid_t: (down: UInt64, up: UInt64)]? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
@@ -685,7 +711,10 @@ final class SystemMonitor: ObservableObject {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
+        do { try process.run() } catch {
+            lastNettopProblem = "nettop couldn't start: \(error.localizedDescription)"
+            return nil
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
             if process.isRunning { process.terminate() }
         }
@@ -694,14 +723,22 @@ final class SystemMonitor: ObservableObject {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
 
         var result: [pid_t: (down: UInt64, up: UInt64)] = [:]
-        for line in text.split(separator: "\n") {
+        for line in text.split(whereSeparator: \.isNewline) {
+            // Columns differ between macOS versions (a time column or not), so find the
+            // "name.pid" field (no colon, unlike the time) and take the two numbers after it
             let fields = line.split(separator: ",", omittingEmptySubsequences: false)
-            guard fields.count >= 4, let dot = fields[1].lastIndex(of: "."),
-                  let pid = pid_t(fields[1][fields[1].index(after: dot)...]),
-                  let down = UInt64(fields[2].trimmingCharacters(in: .whitespaces)),
-                  let up = UInt64(fields[3].trimmingCharacters(in: .whitespaces)) else { continue }
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            guard let i = fields.firstIndex(where: Self.isNameAndPID),
+                  i + 2 < fields.count,
+                  let dot = fields[i].lastIndex(of: "."),
+                  let pid = pid_t(fields[i][fields[i].index(after: dot)...]),
+                  let down = UInt64(fields[i + 1]), let up = UInt64(fields[i + 2]) else { continue }
             let old = result[pid] ?? (0, 0)
             result[pid] = (old.down + down, old.up + up)
+        }
+        if result.isEmpty {
+            lastNettopProblem = text.isEmpty ? "nettop printed nothing"
+                : "nettop's output wasn't understood: " + String(text.prefix(160))
         }
         return result.isEmpty ? nil : result
     }
@@ -888,7 +925,16 @@ final class SystemMonitor: ObservableObject {
 
         // Running hot
         if d.object(forKey: "sysAlertHeat") as? Bool ?? true {
-            let hot = thermal == .serious || thermal == .critical
+            // A MacBook Air has no fan: it slows itself down long before macOS calls it "serious",
+            // so a chip that stays very hot for a minute counts too
+            let limit = UserDefaults.standard.object(forKey: "sysHeatLimit") as? Double ?? 95
+            if let t = temperature, t >= limit {
+                if hotSince == nil { hotSince = Date() }
+            } else if (temperature ?? 0) < limit - 10 {
+                hotSince = nil
+            }
+            let sustained = hotSince.map { Date().timeIntervalSince($0) >= 60 } ?? false
+            let hot = thermal == .serious || thermal == .critical || sustained
             if hot && !heatWarned {
                 heatWarned = true
                 let top = apps.first { $0.canQuit && !ignored.contains($0.id) }
@@ -898,7 +944,7 @@ final class SystemMonitor: ObservableObject {
                                          ?? "macOS may slow things down to cool off",
                                      value: temperature.map { "\(Int($0))°" } ?? "",
                                      symbol: "thermometer.high", appID: top?.id, appPath: top?.path))
-            } else if !hot {
+            } else if !hot && hotSince == nil && thermal != .serious && thermal != .critical {
                 heatWarned = false
             }
         }

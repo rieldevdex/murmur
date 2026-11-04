@@ -342,7 +342,7 @@ struct SystemDashboardView: View {
     private var emptyText: String {
         switch category {
         case .gpu: return monitor.gpuPerApp ? "Nothing is using the GPU" : "This Mac doesn't report GPU use per app"
-        case .network: return monitor.networkPerApp ? "Nothing is using the network right now" : "Measuring…"
+        case .network: return monitor.networkPerApp ? "Nothing is using the network right now" : monitor.networkPerAppProblem != nil ? "Per-app network couldn't be read (totals above still work)" : "Measuring…"
         default: return "Measuring…"
         }
     }

@@ -503,6 +503,7 @@ struct SystemSettings: View {
     @AppStorage("sysAlertMemory") private var memoryAlert = true
     @AppStorage("sysAlertBattery") private var batteryAlert = true
     @AppStorage("sysAlertHeat") private var heatAlert = true
+    @AppStorage("sysHeatLimit") private var heatLimit = 95.0
     @State private var ignored: [String] = UserDefaults.standard.stringArray(forKey: "ignoredApps") ?? []
     @AppStorage("usageLog") private var usageLog = false
     @AppStorage("usageLogSites") private var usageLogSites = false
@@ -570,12 +571,20 @@ struct SystemSettings: View {
                     Toggle("Memory running low", isOn: $memoryAlert)
                     Toggle("Battery at 20% and 10%", isOn: $batteryAlert)
                     Toggle("Mac running hot", isOn: $heatAlert)
+                    LabeledContent("Hot means the chip stays above") {
+                        HStack {
+                            Slider(value: $heatLimit, in: 80...105, step: 5).frame(width: 140)
+                            Text("\(Int(heatLimit))°C").monospacedDigit().foregroundStyle(.secondary)
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                    }
+                    .disabled(!heatAlert)
                 }
                 .disabled(!alerts)
             } header: {
                 Text("Alerts")
             } footer: {
-                Text("Alerts appear in the notch with Quit and Ignore buttons. Nothing is ever quit without you clicking Quit. 100% means one full CPU core, as in Activity Monitor, so busy apps can go well above 100%.")
+                Text("Alerts appear in the notch with Quit and Ignore buttons. Nothing is ever quit without you clicking Quit. 100% means one full CPU core, as in Activity Monitor, so busy apps can go well above 100%. The heat alert comes when the chip stays above your limit for a minute, or when macOS itself says it's hot; a MacBook Air has no fan, so it slows down to cool off rather than getting louder.")
                     .foregroundStyle(.secondary)
             }
 
@@ -722,6 +731,9 @@ struct ExtrasSettings: View {
     @State private var iphoneValue = ""
     @State private var noiseStatus = ListeningModeWatcher.diagnosis()
     @State private var indicatorChanged = false
+    @AppStorage("claudeApprovals") private var claude = false
+    @State private var claudeInstalled = ClaudeHook.isInstalled()
+    @State private var claudeMessage: String?
 
     var body: some View {
         Form {
@@ -850,6 +862,51 @@ struct ExtrasSettings: View {
             }
             .onChange(of: hearing) { _ in NotchController.shared.refreshOptions() }
             .onChange(of: listening) { _ in NotchController.shared.refreshOptions() }
+
+            Section {
+                Toggle(isOn: $claude) {
+                    Text("Approve Claude Code from the notch")
+                    Text("When Claude Code on this Mac asks to run a command or edit a file, the question appears in the island with Allow and Deny.")
+                }
+                .onChange(of: claude) { on in
+                    if on && !claudeInstalled {
+                        claudeMessage = ClaudeHook.install()
+                        claudeInstalled = ClaudeHook.isInstalled()
+                    }
+                    NotchController.shared.refreshOptions()
+                }
+                LabeledContent("Claude Code") {
+                    HStack {
+                        Text(claudeInstalled ? "Connected" : "Not connected")
+                            .foregroundStyle(claudeInstalled ? Color.green : Color.secondary)
+                        if claudeInstalled {
+                            Button("Disconnect") {
+                                ClaudeHook.uninstall()
+                                claudeInstalled = ClaudeHook.isInstalled()
+                                claude = false
+                            }
+                        } else {
+                            Button("Connect") {
+                                claudeMessage = ClaudeHook.install()
+                                claudeInstalled = ClaudeHook.isInstalled()
+                                if claudeInstalled { claude = true }
+                            }
+                        }
+                        Button("Copy Settings") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(ClaudeHook.snippet, forType: .string)
+                        }
+                    }
+                }
+                if let m = claudeMessage {
+                    Text(m).font(.caption).foregroundStyle(.orange)
+                }
+            } header: {
+                Text("Claude Code")
+            } footer: {
+                Text("Connect adds a small hook to ~/.claude/settings.json (a backup is saved next to it). It only talks to Murmur on this Mac. Works for Claude Code in Terminal, the desktop app and editors on this Mac; cloud sessions in the browser keep their own prompts. If you don't answer within 50 seconds, pick \u{201C}Ask in Claude\u{201D}, or Murmur isn't running, Claude Code asks in its own window as usual. Start a new Claude Code session after connecting.")
+                    .foregroundStyle(.secondary)
+            }
 
             Section {
                 Toggle("Greet me the first time I use my Mac each day", isOn: $greeting)

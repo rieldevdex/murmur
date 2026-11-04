@@ -233,12 +233,13 @@ enum IslandActivity: Equatable {
     case screenshot(URL)
     case greeting(Greeting)
     case listening(ListeningMode)
+    case approval(ClaudeRequest)
 
     var isHUD: Bool {
         switch self {
         case .volume, .brightness: return true
         case .device, .message, .alert, .definition, .power, .keyboard, .capsLock, .screenshot, .greeting,
-             .listening:
+             .listening, .approval:
             return false
         }
     }
@@ -254,13 +255,14 @@ enum IslandActivity: Equatable {
         case .keyboard, .capsLock, .listening: return 5
         case .screenshot: return 6
         case .greeting: return 7
+        case .approval: return 8
         }
     }
 
     /// Cards with their own buttons, or ones you drag from: clicks there don't open the island
     var handlesOwnClicks: Bool {
         switch self {
-        case .alert, .screenshot, .greeting: return true
+        case .alert, .screenshot, .greeting, .approval: return true
         default: return false
         }
     }
@@ -285,7 +287,7 @@ final class NotchState: ObservableObject {
         if expanded { return .expanded }
         if let a = activity {
             switch a {
-            case .alert, .definition, .screenshot, .greeting: return .alert   // all the same card shape
+            case .alert, .definition, .screenshot, .greeting, .approval: return .alert   // all the same card shape
             case .keyboard, .capsLock, .listening: return .badge
             default: break
             }
@@ -571,6 +573,7 @@ final class NotchController {
         if Extras.greeting { Greeter.shared.start() } else { Greeter.shared.stop() }
         if HearingMonitor.enabled { HearingMonitor.shared.start() } else { HearingMonitor.shared.stop() }
         if ListeningModeWatcher.enabled { ListeningModeWatcher.shared.start() } else { ListeningModeWatcher.shared.stop() }
+        ClaudeBridge.shared.setEnabled(ClaudeBridge.enabled)
         updateMonitor()
     }
 
@@ -609,6 +612,25 @@ final class NotchController {
 
     /// Closes whatever announcement is showing
     func dismissActivity() {
+        if case .approval? = state.activity { ClaudeBridge.shared.decide(nil); return }
+        withAnimation(IslandMotion.close) { state.activity = nil }
+    }
+
+    // MARK: Claude Code
+
+    var isRunning: Bool { panel != nil }
+
+    /// A permission question from Claude Code: shown over everything, until answered
+    func showApproval(_ request: ClaudeRequest) {
+        guard panel != nil else { ClaudeBridge.shared.decide(nil); return }
+        if state.expanded { collapse() }
+        Self.haptic(.levelChange)
+        activityUntil = Date().addingTimeInterval(ClaudeBridge.wait + 5)
+        withAnimation(IslandMotion.preview) { state.activity = .approval(request) }
+    }
+
+    func dismissApproval() {
+        guard case .approval? = state.activity else { return }
         withAnimation(IslandMotion.close) { state.activity = nil }
     }
 
@@ -663,6 +685,8 @@ final class NotchController {
             withAnimation(.easeInOut(duration: 0.2)) { state.tab = t }
         }
         guard !state.expanded else { return }
+        // Claude Code's question needs an answer first (Allow, Deny or Ask in Claude)
+        if case .approval? = state.activity { return }
         Self.haptic(.levelChange)
         hoverPreview = false
         previewUntil = .distantPast
@@ -681,6 +705,10 @@ final class NotchController {
 
     func show(_ activity: IslandActivity, for seconds: Double) {
         guard panel != nil else { return }
+        // A question from Claude Code stays up until it's answered; volume and the like wait
+        if case .approval? = state.activity {
+            if case .approval = activity {} else { return }
+        }
         if state.expanded {
             if case .alert = activity {} else { return }
         }
@@ -877,6 +905,8 @@ final class NotchController {
             } else if abs(dx) < 8 && abs(dy) < 8 {
                 if case .alert? = state.activity {
                     // its own buttons handle the click
+                } else if case .approval? = state.activity {
+                    // so do Claude Code's Allow / Deny
                 } else if case .definition(let d)? = state.activity {
                     DictionaryApp.open(d.word)
                     dismissActivity()
@@ -1218,6 +1248,9 @@ struct NotchIslandView: View {
                                 .padding(.horizontal, 18)
                         } else if case .greeting(let g)? = state.activity {
                             GreetingCard(greeting: g, notch: notch)
+                                .padding(.horizontal, 18)
+                        } else if case .approval(let r)? = state.activity {
+                            ApprovalCard(request: r, notch: notch)
                                 .padding(.horizontal, 18)
                         }
                     case .badge:

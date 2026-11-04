@@ -72,7 +72,7 @@ struct SystemTabView: View {
     private func emptyText(_ category: UsageCategory) -> String {
         switch category {
         case .gpu: return monitor.gpuPerApp ? "Nothing is using the GPU" : "This Mac doesn't report GPU use per app"
-        case .network: return monitor.networkPerApp ? "Nothing is using the network" : "Measuring…"
+        case .network: return monitor.networkPerApp ? "Nothing is using the network" : monitor.networkPerAppProblem != nil ? "Per-app network couldn't be read (totals above still work)" : "Measuring…"
         default: return "Measuring…"
         }
     }
