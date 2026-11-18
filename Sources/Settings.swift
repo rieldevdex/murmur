@@ -231,6 +231,7 @@ struct NotchSettings: View {
     @AppStorage("notchPower") private var power = true
     @AppStorage("notchSwipe") private var swipe = true
     @AppStorage("notchTabSwipe") private var tabSwipe = true
+    @AppStorage("notchSwipeReverse") private var swipeReverse = false
     @AppStorage("notchScrollVolume") private var scrollVolume = true
     @AppStorage("notchDevices") private var devices = true
     @AppStorage("notchHUD") private var hud = true
@@ -256,6 +257,11 @@ struct NotchSettings: View {
                 Section("Behaviour") {
                     Toggle("Announce new songs", isOn: $announce)
                     Toggle("Swipe sideways with two fingers to skip songs", isOn: $swipe)
+                    Picker("Next song", selection: $swipeReverse) {
+                        Text("Swipe right").tag(false)
+                        Text("Swipe left").tag(true)
+                    }
+                    .disabled(!swipe)
                     Toggle("Swipe sideways in the open island to change tabs", isOn: $tabSwipe)
                     Toggle("Scroll up and down for volume", isOn: $scrollVolume)
                     Toggle("Show lyrics", isOn: $lyrics)

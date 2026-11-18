@@ -293,6 +293,9 @@ final class NotchState: ObservableObject {
     @Published var trackSlide: CGFloat = 0 // the artwork sliding out and back in on a skip (-1…1)
     @Published var pageOffset: CGFloat = 0 // the open island's page following two fingers sideways
     @Published var tabDirection: CGFloat = 1 // which way the next tab change slides (1 = from the right)
+    @Published var shownArt: NSImage?          // the cover on screen: the old one is held until the new one loads
+    @Published var swipedAt = Date.distantPast // just skipped by swiping: covers and titles slide instead of flipping
+    @Published var swipeDirection: CGFloat = 1 // which way the fingers went on the last skip (1 = right)
 
     func mode(active: Bool) -> IslandMode {
         if expanded { return .expanded }
@@ -373,6 +376,12 @@ enum IslandTabs {
     }
 }
 
+/// Which way skips: by default moving right goes to the next song (Settings can swap it)
+enum SwipeDirection {
+    static var rightIsNext: Bool { !(UserDefaults.standard.object(forKey: "notchSwipeReverse") as? Bool ?? false) }
+    static func isNext(_ movement: CGFloat) -> Bool { rightIsNext ? movement > 0 : movement < 0 }
+}
+
 /// Follows the fingers one to one at first, then resists more and more (like iOS at an edge)
 func rubberBand(_ x: CGFloat, limit: CGFloat) -> CGFloat {
     let sign: CGFloat = x < 0 ? -1 : 1
@@ -391,6 +400,23 @@ final class NotchController {
     private var screenObserver: NSObjectProtocol?
     private var clickMonitors: [Any] = []
     private var trackWatch: AnyCancellable?
+    private var artWatch: AnyCancellable?
+    private var artClear: DispatchWorkItem?
+
+    fileprivate func artworkChanged(_ art: NSImage?) {
+        artClear?.cancel()
+        if let art = art {
+            withAnimation(.easeInOut(duration: 0.3)) { state.shownArt = art }
+        } else {
+            let item = DispatchWorkItem {
+                Task { @MainActor in
+                    withAnimation(.easeInOut(duration: 0.3)) { NotchController.shared.state.shownArt = nil }
+                }
+            }
+            artClear = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: item)
+        }
+    }
     private weak var np: NowPlaying?
     private weak var tap: AudioTap?
 
@@ -493,6 +519,14 @@ final class NotchController {
         }
 
         // Quick Preview: announce each new song
+        // Keep the old cover up for a moment while the new one loads, instead of flashing an empty
+        // square in between (if nothing arrives, it clears after a second and a half)
+        artWatch = np.$artwork
+            .receive(on: RunLoop.main)
+            .sink { art in
+                Task { @MainActor in NotchController.shared.artworkChanged(art) }
+            }
+
         trackWatch = np.$trackChangeCount
             .dropFirst()
             .receive(on: RunLoop.main)
@@ -707,6 +741,7 @@ final class NotchController {
         if let g = scrollGlobalMonitor { NSEvent.removeMonitor(g) }
         scrollGlobalMonitor = nil
         trackWatch = nil
+        artWatch = nil
         volumeWatcher.stop()
         brightnessTimer?.invalidate()
         brightnessTimer = nil
@@ -871,13 +906,16 @@ final class NotchController {
     // MARK: Gestures
 
     /// Skips forward or back, with a tap on the trackpad and a little arrow in the island
-    func swipe(next: Bool) {
+    /// `fingersRight`: which way the fingers (or pointer) moved, so the cover leaves that way
+    func swipe(next: Bool, fingersRight: Bool) {
         guard let np = np, np.spotifyRunning else { return }
         if next { np.nextTrack() } else { np.previousTrack() }
         Self.haptic(.levelChange)
         let direction = next ? 1 : -1
+        state.swipedAt = Date()
+        state.swipeDirection = fingersRight ? 1 : -1
         // The cover slides off the way your fingers went, and the next one slides in from the other side
-        let out: CGFloat = next ? -1 : 1
+        let out: CGFloat = fingersRight ? 1 : -1
         withAnimation(.easeIn(duration: 0.15)) { state.trackSlide = out }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 160_000_000)
@@ -962,7 +1000,7 @@ final class NotchController {
                 scrollFired = true
                 if state.swipeArmed { state.swipeArmed = false }
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { state.dragOffset = 0 }
-                if armed { swipe(next: scrollX < 0) }
+                if armed { swipe(next: SwipeDirection.isNext(scrollX), fingersRight: scrollX > 0) }
                 return
             }
             state.dragOffset = rubberBand(scrollX, limit: canSkip ? 60 : 18)
@@ -1058,7 +1096,16 @@ final class NotchController {
     private func announce() {
         guard UserDefaults.standard.object(forKey: "notchAnnounce") as? Bool ?? true,
               !state.expanded else { return }
-        previewUntil = Date().addingTimeInterval(4)
+        // Right after a swipe, let the cover finish sliding before the preview opens
+        let wait = max(0, 0.4 - Date().timeIntervalSince(state.swipedAt))
+        if wait > 0 {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                self.previewUntil = Date().addingTimeInterval(4)
+            }
+        } else {
+            previewUntil = Date().addingTimeInterval(4)
+        }
     }
 
     /// The area that reacts to the pointer while the island is closed: the island itself,
@@ -1135,7 +1182,7 @@ final class NotchController {
                     expand()
                 }
             } else if swipeOn && abs(dx) > 40 && abs(dx) > abs(dy) {
-                swipe(next: dx < 0)
+                swipe(next: SwipeDirection.isNext(dx), fingersRight: dx > 0)
             }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.62)) { state.dragOffset = 0 }
         default:
@@ -1316,7 +1363,8 @@ final class NotchController {
 
         let wantPreview = active && (hoverPreview || now < previewUntil)
         if wantPreview != state.previewing {
-            withAnimation(IslandMotion.preview) { state.previewing = wantPreview }
+            // Opens with a little life, closes smoothly without bouncing
+            withAnimation(wantPreview ? IslandMotion.preview : IslandMotion.close) { state.previewing = wantPreview }
         }
 
         // Only catch clicks while the pointer is over the island; otherwise the menu bar works as normal
@@ -1512,11 +1560,13 @@ struct NotchIslandView: View {
                 let dragging = abs(state.dragOffset) > 3 && mode != .expanded
                 let flashing = state.swipeFlash != 0 && mode != .expanded
                 if dragging || flashing {
-                    let next = flashing ? state.swipeFlash > 0 : state.dragOffset < 0
+                    let next = flashing ? state.swipeFlash > 0 : SwipeDirection.isNext(state.dragOffset)
+                    // On the side the fingers are moving towards
+                    let right = flashing ? state.swipeDirection > 0 : state.dragOffset > 0
                     let grow = flashing ? 1 : min(1, abs(state.dragOffset) / 40)
                     let solid = flashing || state.swipeArmed
                     HStack {
-                        if next { Spacer(minLength: 0) }
+                        if right { Spacer(minLength: 0) }
                         Image(systemName: next ? "forward.fill" : "backward.fill")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(solid ? Color.black : Color.white)
@@ -1524,8 +1574,8 @@ struct NotchIslandView: View {
                             .background(Circle().fill(solid ? Color.white : Color.white.opacity(0.18)))
                             .scaleEffect(0.55 + 0.45 * grow)
                             .opacity(Double(grow))
-                            .offset(x: next ? -4 * (1 - grow) : 4 * (1 - grow))
-                        if !next { Spacer(minLength: 0) }
+                            .offset(x: right ? -4 * (1 - grow) : 4 * (1 - grow))
+                        if !right { Spacer(minLength: 0) }
                     }
                     .padding(.horizontal, flare + 9)
                     .frame(height: notch.height)
@@ -1733,6 +1783,14 @@ struct NotchIslandView: View {
                 MarqueeText(text: titleText, font: IslandType.title, color: .white, height: 19)
                 MarqueeText(text: artistText, font: IslandType.subtitle, color: IslandType.secondary, height: 16)
             }
+            // A new song's name slides in (the way you swiped, after a swipe) instead of snapping
+            .id(titleText + "\u{1}" + artistText)
+            .transition(.asymmetric(
+                insertion: .offset(x: (justSwiped ? state.swipeDirection : 1) * 14).combined(with: .opacity),
+                removal: .offset(x: (justSwiped ? state.swipeDirection : 1) * -14).combined(with: .opacity)))
+            .animation(.spring(response: 0.42, dampingFraction: 0.85), value: titleText + artistText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
             .padding(.leading, PreviewLayout.textLeft)
             .padding(.trailing, 16)
             .padding(.top, notch.height + 3)
@@ -2217,17 +2275,20 @@ struct NotchIslandView: View {
         .buttonStyle(PressableStyle())
     }
 
+    private var justSwiped: Bool { Date().timeIntervalSince(state.swipedAt) < 2.5 }
+
     /// Changes whenever a different cover (or no cover) shows, which turns the card over
     private var artKey: String {
         if systemOnly { return "system" }
-        return np.artwork.map { String(describing: ObjectIdentifier($0)) } ?? "none"
+        return state.shownArt.map { String(describing: ObjectIdentifier($0)) } ?? "none"
     }
 
     private func thumb(size: CGFloat, corner: CGFloat) -> some View {
         ZStack {
             thumbFace(size: size)
-                .id(flipOn ? artKey : "cover")
-                .transition(flipOn ? .coverFlip : .identity)
+                .id(flipOn || justSwiped ? artKey : "cover")
+                // Swiping already slides the cover, so it just fades to the new one then
+                .transition(justSwiped ? .opacity : flipOn ? .coverFlip : .identity)
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
@@ -2236,7 +2297,7 @@ struct NotchIslandView: View {
 
     private func thumbFace(size: CGFloat) -> some View {
         Group {
-            if let art = np.artwork, !systemOnly {
+            if let art = state.shownArt, !systemOnly {
                 Image(nsImage: art).resizable().scaledToFill()
             } else {
                 Color.white.opacity(0.1)
