@@ -289,6 +289,10 @@ final class NotchState: ObservableObject {
     @Published var dragOffset: CGFloat = 0 // follows the pointer during a click-drag swipe
     @Published var pinned = false          // locked open: stays until unlocked
     @Published var pull: CGFloat = 0       // pulled down with the pointer (rubber band)
+    @Published var swipeArmed = false      // a two-finger swipe has gone far enough to skip when let go
+    @Published var trackSlide: CGFloat = 0 // the artwork sliding out and back in on a skip (-1…1)
+    @Published var pageOffset: CGFloat = 0 // the open island's page following two fingers sideways
+    @Published var tabDirection: CGFloat = 1 // which way the next tab change slides (1 = from the right)
 
     func mode(active: Bool) -> IslandMode {
         if expanded { return .expanded }
@@ -352,8 +356,27 @@ struct ScrollInfo {
     let precise: Bool
     let inverted: Bool
     let began: Bool
+    let ended: Bool
     let momentum: Bool
     let windowNumber: Int
+}
+
+/// The order of the open island's tabs (only the ones switched on)
+enum IslandTabs {
+    static func visible() -> [IslandTab] {
+        let d = UserDefaults.standard
+        var tabs: [IslandTab] = [.music]
+        if d.object(forKey: "timerTab") as? Bool ?? true { tabs.append(.today) }
+        if d.object(forKey: "notchShelf") as? Bool ?? true { tabs.append(.shelf) }
+        if d.object(forKey: "sysTab") as? Bool ?? true { tabs.append(.system) }
+        return tabs
+    }
+}
+
+/// Follows the fingers one to one at first, then resists more and more (like iOS at an edge)
+func rubberBand(_ x: CGFloat, limit: CGFloat) -> CGFloat {
+    let sign: CGFloat = x < 0 ? -1 : 1
+    return sign * limit * (1 - exp(-abs(x) / limit))
 }
 
 // MARK: - Controller: pointer tracking, clicks, haptics, song announcements
@@ -389,6 +412,13 @@ final class NotchController {
     private var scrollX: CGFloat = 0
     private var scrollY: CGFloat = 0
     private var scrollFired = false
+    /// Which way this two-finger gesture is going, decided by its first few points of movement
+    private enum ScrollAxis { case sideways, upDown }
+    private var scrollAxis: ScrollAxis?
+    /// A swipe that started over a list that scrolls sideways (shelf files, clipboard) scrolls it instead
+    private var scrollOverList = false
+    /// Ends a swipe if the trackpad never says it ended (e.g. the fingers lift off the island)
+    private var scrollEndTimer: DispatchWorkItem?
     private var dragBaseline = NSPasteboard(name: .drag).changeCount
     private var wasDraggingFiles = false
 
@@ -472,6 +502,7 @@ final class NotchController {
                                   precise: e.hasPreciseScrollingDeltas,
                                   inverted: e.isDirectionInvertedFromDevice,
                                   began: e.phase.contains(.began) || e.phase.contains(.mayBegin),
+                                  ended: e.phase.contains(.ended) || e.phase.contains(.cancelled),
                                   momentum: e.momentumPhase != [],
                                   windowNumber: e.windowNumber)
             Task { @MainActor in NotchController.shared.scrolled(info) }
@@ -830,6 +861,16 @@ final class NotchController {
         if next { np.nextTrack() } else { np.previousTrack() }
         Self.haptic(.levelChange)
         let direction = next ? 1 : -1
+        // The cover slides off the way your fingers went, and the next one slides in from the other side
+        let out: CGFloat = next ? -1 : 1
+        withAnimation(.easeIn(duration: 0.15)) { state.trackSlide = out }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 160_000_000)
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { self.state.trackSlide = -out }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) { self.state.trackSlide = 0 }
+        }
         withAnimation(.spring(response: 0.3, dampingFraction: 0.65)) { state.swipeFlash = direction }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -840,7 +881,7 @@ final class NotchController {
     }
 
     fileprivate func scrolled(_ e: ScrollInfo) {
-        guard let p = panel, e.windowNumber == p.windowNumber, !state.expanded, !e.momentum else { return }
+        guard let p = panel, e.windowNumber == p.windowNumber, !e.momentum else { return }
         let d = UserDefaults.standard
 
         // Which way the fingers actually moved, whatever the natural-scrolling setting
@@ -848,28 +889,122 @@ final class NotchController {
         let fy = e.inverted ? e.dy : -e.dy
 
         if !e.precise {
-            // A mouse wheel: each notch is one volume step
-            if d.object(forKey: "notchScrollVolume") as? Bool ?? true, e.dy != 0 {
+            // A mouse wheel: each notch is one volume step (closed island only)
+            if !state.expanded, d.object(forKey: "notchScrollVolume") as? Bool ?? true, e.dy != 0 {
                 SystemVolume.step(e.dy > 0 ? 1.0 / 16 : -1.0 / 16)
             }
             return
         }
 
-        if e.began { scrollX = 0; scrollY = 0; scrollFired = false }
+        if e.began {
+            scrollX = 0; scrollY = 0; scrollFired = false; scrollAxis = nil
+            scrollOverList = state.expanded && pointerOverSideScrollingList()
+        }
         scrollX += fx
         scrollY += fy
+        if scrollAxis == nil, abs(scrollX) > 5 || abs(scrollY) > 5 {
+            scrollAxis = abs(scrollX) > abs(scrollY) ? .sideways : .upDown
+        }
 
-        if abs(scrollX) > abs(scrollY) {
-            // Sideways: one skip per swipe
-            guard d.object(forKey: "notchSwipe") as? Bool ?? true, !scrollFired, abs(scrollX) > 45 else { return }
-            scrollFired = true
-            swipe(next: scrollX < 0)
-        } else if d.object(forKey: "notchScrollVolume") as? Bool ?? true {
+        // If the trackpad never reports the end (fingers slid off the island), finish anyway
+        scrollEndTimer?.cancel()
+        if !e.ended {
+            let item = DispatchWorkItem { Task { @MainActor in NotchController.shared.finishScroll() } }
+            scrollEndTimer = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+        }
+
+        if state.expanded {
+            pageSwipe(ended: e.ended)
+        } else {
+            closedSwipe(ended: e.ended)
+        }
+    }
+
+    func finishScroll() {
+        scrollEndTimer = nil
+        if state.expanded { pageSwipe(ended: true) } else { closedSwipe(ended: true) }
+    }
+
+    /// Closed island: sideways skips (the island follows your fingers; drag back to cancel),
+    /// up and down changes the volume
+    private func closedSwipe(ended: Bool) {
+        let d = UserDefaults.standard
+        switch scrollAxis {
+        case .sideways:
+            guard d.object(forKey: "notchSwipe") as? Bool ?? true, !scrollFired else { return }
+            let canSkip = np?.spotifyRunning == true
+            let armed = canSkip && abs(scrollX) > 45
+            if ended {
+                scrollFired = true
+                if state.swipeArmed { state.swipeArmed = false }
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { state.dragOffset = 0 }
+                if armed { swipe(next: scrollX < 0) }
+                return
+            }
+            state.dragOffset = rubberBand(scrollX, limit: canSkip ? 60 : 18)
+            if armed != state.swipeArmed {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) { state.swipeArmed = armed }
+                if armed { Self.haptic(.alignment) }      // a click when letting go will skip
+            }
+        case .upDown:
+            guard d.object(forKey: "notchScrollVolume") as? Bool ?? true else { return }
             // Up and down: volume, in small steps as the fingers move
             let stepSize: CGFloat = 14
             while scrollY <= -stepSize { SystemVolume.step(1.0 / 32); scrollY += stepSize }
             while scrollY >= stepSize { SystemVolume.step(-1.0 / 32); scrollY -= stepSize }
+        case nil:
+            break
         }
+    }
+
+    /// Open island: sideways moves to the next or previous tab, the page following your fingers
+    private func pageSwipe(ended: Bool) {
+        guard scrollAxis == .sideways, !scrollOverList, !scrollFired,
+              UserDefaults.standard.object(forKey: "notchTabSwipe") as? Bool ?? true else { return }
+        let tabs = IslandTabs.visible()
+        guard let index = tabs.firstIndex(of: state.tab) else { return }
+        // Fingers moving left bring in the tab on the right
+        let forward = scrollX < 0
+        let target = forward ? index + 1 : index - 1
+        let hasNeighbour = tabs.indices.contains(target)
+
+        if ended {
+            scrollFired = true
+            if hasNeighbour && abs(scrollX) > 55 {
+                showTab(tabs[target])
+            }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { state.pageOffset = 0 }
+            return
+        }
+        // At the first or last tab it only gives a little, so you can feel the edge
+        state.pageOffset = rubberBand(scrollX, limit: hasNeighbour ? 70 : 20)
+    }
+
+    /// Switches tab, sliding the new one in from the side it sits on in the switcher
+    func showTab(_ tab: IslandTab) {
+        guard tab != state.tab else { return }
+        let tabs = IslandTabs.visible()
+        let from = tabs.firstIndex(of: state.tab) ?? 0
+        let to = tabs.firstIndex(of: tab) ?? 0
+        state.tabDirection = to > from ? 1 : -1
+        Self.haptic(.generic)
+        // Direction first, then the change, so both the old and new page use it
+        Task { @MainActor in
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { self.state.tab = tab }
+        }
+    }
+
+    /// Whether the pointer is over the shelf's or clipboard's sideways list, which scrolls instead
+    private func pointerOverSideScrollingList() -> Bool {
+        guard state.tab == .shelf, let m = NotchMetrics.current() else { return false }
+        let mode = UserDefaults.standard.string(forKey: "shelfMode") ?? "files"
+        let hasList = mode == "clipboard" ? !ClipboardStore.shared.items.isEmpty
+            : mode == "files" ? !ShelfStore.shared.items.isEmpty : false
+        guard hasList else { return false }
+        // Below the row beside the notch (where the tab switcher is), the list takes the swipe
+        let topOfScreen = m.screen.frame.maxY
+        return NSEvent.mouseLocation.y < topOfScreen - m.notch.height - 6
     }
 
     func collapse() {
@@ -1336,24 +1471,34 @@ struct NotchIslandView: View {
                 let art = artPlacement(mode, notch: notch, flare: flare)
                 thumb(size: art.size, corner: art.corner)
                     .shadow(color: .black.opacity(art.shadow ? 0.4 : 0), radius: 8, y: 3)
-                    .scaleEffect(art.visible ? 1 : 0.6)
-                    .opacity(art.visible ? 1 : 0)
+                    .scaleEffect(art.visible ? 1 - abs(state.trackSlide) * 0.25 : 0.6)
+                    .opacity(art.visible ? 1 - abs(state.trackSlide) : 0)
                     .position(x: art.center.x, y: art.center.y)
                     .allowsHitTesting(false)
 
-                // A small arrow on the side you swiped towards
-                if state.swipeFlash != 0 && mode != .expanded {
+                // While swiping: an arrow grows on the side the next song comes from, filling in
+                // once letting go will skip; after a skip it flashes on that side
+                let dragging = abs(state.dragOffset) > 3 && mode != .expanded
+                let flashing = state.swipeFlash != 0 && mode != .expanded
+                if dragging || flashing {
+                    let next = flashing ? state.swipeFlash > 0 : state.dragOffset < 0
+                    let grow = flashing ? 1 : min(1, abs(state.dragOffset) / 40)
+                    let solid = flashing || state.swipeArmed
                     HStack {
-                        if state.swipeFlash > 0 { Spacer(minLength: 0) }
-                        Image(systemName: state.swipeFlash > 0 ? "forward.fill" : "backward.fill")
+                        if next { Spacer(minLength: 0) }
+                        Image(systemName: next ? "forward.fill" : "backward.fill")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(solid ? Color.black : Color.white)
                             .frame(width: notch.height - 12, height: notch.height - 12)
-                            .background(Circle().fill(Color.white.opacity(0.18)))
-                        if state.swipeFlash < 0 { Spacer(minLength: 0) }
+                            .background(Circle().fill(solid ? Color.white : Color.white.opacity(0.18)))
+                            .scaleEffect(0.55 + 0.45 * grow)
+                            .opacity(Double(grow))
+                            .offset(x: next ? -4 * (1 - grow) : 4 * (1 - grow))
+                        if !next { Spacer(minLength: 0) }
                     }
                     .padding(.horizontal, flare + 9)
                     .frame(height: notch.height)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: solid)
                     .transition(.scale(scale: 0.5).combined(with: .opacity))
                 }
             }
@@ -1443,7 +1588,7 @@ struct NotchIslandView: View {
     /// Where the artwork sits in each state (these match the gaps left for it in each layout)
     private func artPlacement(_ mode: IslandMode, notch: CGSize, flare: CGFloat) -> ArtPlacement {
         let small = max(14, notch.height - 14)
-        let drag = max(-14, min(14, state.dragOffset * 0.25))
+        let drag = max(-14, min(14, state.dragOffset * 0.25)) + state.trackSlide * 16
         var p = ArtPlacement(center: CGPoint(x: flare + 9 + small / 2 + drag, y: notch.height / 2),
                              size: small, corner: 5, visible: false, shadow: false)
         switch mode {
@@ -1601,7 +1746,7 @@ struct NotchIslandView: View {
                 case .music:
                     musicCard(notch: notch)
                         .padding(.horizontal, -20)        // the player lays itself out edge to edge
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                        .transition(pageTransition)
                 case .shelf:
                     Group {
                         if shelfMode == "dictionary" && !dropTargeted {
@@ -1614,25 +1759,36 @@ struct NotchIslandView: View {
                     }
                     .padding(.top, notch.height + 8)
                     .padding(.bottom, 14)
-                    .transition(.opacity)
+                    .transition(pageTransition)
                 case .today:
                     Group {
                         if todayMode == "timer" { TimerTabView() } else { TodayView() }
                     }
                     .padding(.top, notch.height + 8)
                     .padding(.bottom, 14)
-                    .transition(.opacity)
+                    .transition(pageTransition)
                 case .system:
                     SystemTabView()
                         .padding(.top, notch.height + 8)
                         .padding(.bottom, 14)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .transition(pageTransition)
                 }
             }
+            // Follows two fingers sideways, fading a touch as it goes
+            .offset(x: state.pageOffset * 0.6)
+            .opacity(1 - min(0.35, abs(state.pageOffset) / 200))
         }
         .onChange(of: dropTargeted) { over in
             if over && shelfEnabled { withAnimation(.easeInOut(duration: 0.2)) { state.tab = .shelf } }
         }
+    }
+
+    /// Pages slide in from the side their tab sits on, and the old one slides out the other way
+    private var pageTransition: AnyTransition {
+        let d = state.tabDirection
+        return .asymmetric(
+            insertion: .offset(x: 46 * d).combined(with: .opacity),
+            removal: .offset(x: -46 * d).combined(with: .opacity))
     }
 
     private func tabItem(_ tab: IslandTab, _ title: String) -> some View {
@@ -1884,8 +2040,7 @@ struct NotchIslandView: View {
     private func tabIcon(_ tab: IslandTab, _ symbol: String, compact: Bool = false) -> some View {
         let on = state.tab == tab
         return Button {
-            NotchController.haptic(.generic)
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { state.tab = tab }
+            NotchController.shared.showTab(tab)
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: compact ? 9.5 : 10, weight: .semibold))

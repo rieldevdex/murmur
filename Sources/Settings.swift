@@ -230,6 +230,7 @@ struct NotchSettings: View {
     @AppStorage("dictHotKey") private var dictHotKey = true
     @AppStorage("notchPower") private var power = true
     @AppStorage("notchSwipe") private var swipe = true
+    @AppStorage("notchTabSwipe") private var tabSwipe = true
     @AppStorage("notchScrollVolume") private var scrollVolume = true
     @AppStorage("notchDevices") private var devices = true
     @AppStorage("notchHUD") private var hud = true
@@ -254,7 +255,8 @@ struct NotchSettings: View {
             Group {
                 Section("Behaviour") {
                     Toggle("Announce new songs", isOn: $announce)
-                    Toggle("Swipe sideways to skip", isOn: $swipe)
+                    Toggle("Swipe sideways with two fingers to skip songs", isOn: $swipe)
+                    Toggle("Swipe sideways in the open island to change tabs", isOn: $tabSwipe)
                     Toggle("Scroll up and down for volume", isOn: $scrollVolume)
                     Toggle("Show lyrics", isOn: $lyrics)
                     Toggle(isOn: $allSpaces) {

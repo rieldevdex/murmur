@@ -580,10 +580,8 @@ struct Greeting: Equatable {
     var tasks: [PlannerStore.Item] = []
     var moreTasks = 0
 
-    /// Extra height the card needs for the task list
-    var extraHeight: CGFloat {
-        tasks.isEmpty ? 0 : CGFloat(tasks.count) * 19 + (moreTasks > 0 ? 16 : 0) + 8
-    }
+    /// How much taller (or shorter) than a standard card this greeting is, so it fits exactly
+    var extraHeight: CGFloat { GreetingLayout.height(self) - 86 }
 }
 
 @MainActor
@@ -823,84 +821,235 @@ struct GreetingCard: View {
     let notch: CGSize
     @State private var appeared = false
 
+    private static var calm: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Image(systemName: greeting.symbol)
-                    .symbolRenderingMode(.multicolor)
-                    .font(.system(size: max(13, notch.height * 0.45), weight: .medium))
-                    .scaleEffect(appeared ? 1 : 0.4)
-                    .rotationEffect(.degrees(appeared ? 0 : -40))
+                WeatherIcon(symbol: greeting.symbol, size: max(13, notch.height * 0.45), appeared: appeared)
                 Spacer(minLength: 0)
-                if let t = greeting.temperature {
-                    Text(t)
+                if let t = greeting.temperature, let degrees = Int(t.filter { $0.isNumber || $0 == "-" }) {
+                    // Counts up to the temperature
+                    CountingDegrees(value: appeared ? Double(degrees) : 0)
                         .font(.system(size: 14, weight: .semibold).monospacedDigit())
                         .foregroundStyle(Color.white)
+                        .animation(.easeOut(duration: Self.calm ? 0 : 0.9).delay(0.15), value: appeared)
                 }
             }
             .frame(height: notch.height)
 
-            Text(greeting.title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .lineLimit(1)
-                .padding(.top, 6)
-                .opacity(appeared ? 1 : 0)
-                .offset(y: appeared ? 0 : 6)
+            // The greeting rises in word by word
+            HStack(spacing: 4.5) {
+                let words = greeting.title.split(separator: " ").map(String.init)
+                ForEach(Array(words.enumerated()), id: \.offset) { i, word in
+                    Text(word)
+                        .opacity(appeared ? 1 : 0)
+                        .offset(y: appeared ? 0 : 8)
+                        .blur(radius: appeared ? 0 : 4)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.08 + Double(i) * 0.07),
+                                   value: appeared)
+                }
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .lineLimit(1)
+            .frame(height: GreetingLayout.title, alignment: .bottom)
+
             if let w = greeting.weather, !w.isEmpty {
                 Text(w)
                     .font(IslandType.subtitle)
                     .foregroundStyle(IslandType.secondary)
-                    .padding(.top, 2)
+                    .frame(height: GreetingLayout.weather, alignment: .bottom)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(.easeOut(duration: 0.4).delay(0.3), value: appeared)
             }
             if let e = greeting.event {
                 Label(e, systemImage: "calendar")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.8))
                     .lineLimit(1)
-                    .padding(.top, 3)
+                    .frame(height: GreetingLayout.event, alignment: .bottom)
+                    .opacity(appeared ? 1 : 0)
+                    .offset(x: appeared ? 0 : -8)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.8).delay(0.36), value: appeared)
             }
             if !greeting.tasks.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(greeting.tasks.enumerated()), id: \.element.id) { i, task in
-                        HStack(spacing: 7) {
-                            Circle()
-                                .strokeBorder(task.colour ?? Color.white.opacity(0.55), lineWidth: 1.5)
-                                .frame(width: 11, height: 11)
-                            Text(task.title)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(Color.white.opacity(0.92))
-                                .lineLimit(1)
-                            Spacer(minLength: 4)
-                            Text("\(task.urgency)")
-                                .font(.system(size: 9.5, weight: .bold).monospacedDigit())
-                                .foregroundStyle(Color.white)
-                                .frame(minWidth: 16, minHeight: 14)
-                                .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(UrgencyColour.of(task.urgency)))
-                        }
-                        .frame(height: 16)
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 5)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.8).delay(0.25 + Double(i) * 0.08),
-                                   value: appeared)
-                    }
-                    if greeting.moreTasks > 0 {
-                        Text("+ \(greeting.moreTasks) more today")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(IslandType.tertiary)
-                    }
-                }
-                .padding(.top, 8)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    UserDefaults.standard.set("tasks", forKey: "todayMode")
-                    NotchController.shared.expand(tab: .today)
-                }
-                .help("Open Today")
+                tasks.padding(.top, GreetingLayout.tasksGap)
             }
             Spacer(minLength: 0)
         }
-        .onAppear { withAnimation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.1)) { appeared = true } }
+        .background(alignment: .topLeading) {
+            // A soft wash of the weather's colour, breathing gently behind the icon
+            SkyGlow(symbol: greeting.symbol, appeared: appeared)
+                .offset(x: -60, y: -50)
+                .allowsHitTesting(false)
+        }
+        .onAppear { withAnimation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.05)) { appeared = true } }
+    }
+
+    private var tasks: some View {
+        VStack(alignment: .leading, spacing: GreetingLayout.rowGap) {
+            ForEach(Array(greeting.tasks.enumerated()), id: \.element.id) { i, task in
+                let delay = 0.45 + Double(i) * 0.09
+                HStack(spacing: 7) {
+                    // The circle draws itself in
+                    Circle()
+                        .trim(from: 0, to: appeared ? 1 : 0)
+                        .stroke(task.colour ?? Color.white.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 11, height: 11)
+                        .animation(.easeOut(duration: 0.5).delay(delay), value: appeared)
+                    Text(task.title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .lineLimit(1)
+                        .opacity(appeared ? 1 : 0)
+                        .offset(x: appeared ? 0 : 10)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8).delay(delay + 0.05), value: appeared)
+                    Spacer(minLength: 4)
+                    Text("\(task.urgency)")
+                        .font(.system(size: 9.5, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color.white)
+                        .frame(minWidth: 16, minHeight: 14)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(UrgencyColour.of(task.urgency)))
+                        .scaleEffect(appeared ? 1 : 0.2)
+                        .opacity(appeared ? 1 : 0)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.55).delay(delay + 0.15), value: appeared)
+                }
+                .frame(height: GreetingLayout.row)
+            }
+            if greeting.moreTasks > 0 {
+                Text("+ \(greeting.moreTasks) more today")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(IslandType.tertiary)
+                    .frame(height: GreetingLayout.more, alignment: .bottom)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(.easeOut(duration: 0.3).delay(0.45 + Double(greeting.tasks.count) * 0.09 + 0.1),
+                               value: appeared)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            UserDefaults.standard.set("tasks", forKey: "todayMode")
+            NotchController.shared.expand(tab: .today)
+        }
+        .help("Open Today")
+    }
+}
+
+/// Fixed heights for the greeting's lines, so the island is exactly as tall as what's in it
+enum GreetingLayout {
+    static let title: CGFloat = 26      // 6 above + the line
+    static let weather: CGFloat = 17
+    static let event: CGFloat = 19
+    static let tasksGap: CGFloat = 9
+    static let row: CGFloat = 16
+    static let rowGap: CGFloat = 3
+    static let more: CGFloat = 17
+    static let bottom: CGFloat = 16     // breathing room above the island's rounded bottom
+
+    /// Everything below the row beside the notch
+    static func height(_ g: Greeting) -> CGFloat {
+        var h = title
+        if let w = g.weather, !w.isEmpty { h += weather }
+        if g.event != nil { h += event }
+        if !g.tasks.isEmpty {
+            let n = CGFloat(g.tasks.count)
+            h += tasksGap + n * row + (n - 1) * rowGap
+            if g.moreTasks > 0 { h += rowGap + more }
+        }
+        return h + bottom
+    }
+}
+
+/// "28°", counting up from 0
+private struct CountingDegrees: View, Animatable {
+    var value: Double
+    var animatableData: Double {
+        get { value }
+        set { value = newValue }
+    }
+    var body: some View { Text("\(Int(value.rounded()))°") }
+}
+
+/// The weather symbol, moving the way the weather does: the sun turns slowly, clouds drift,
+/// rain and snow bob, and a thunderstorm flashes now and then
+private struct WeatherIcon: View {
+    let symbol: String
+    let size: CGFloat
+    let appeared: Bool
+    @State private var phase = false
+    @State private var flash = false
+
+    private var spins: Bool { symbol.hasPrefix("sun.max") }
+    private var drifts: Bool { symbol.contains("cloud") || symbol.contains("fog") }
+    private var falls: Bool { ["rain", "drizzle", "snow", "bolt"].contains { symbol.contains($0) } }
+    private var storms: Bool { symbol.contains("bolt") }
+    private var twinkles: Bool { symbol.contains("stars") || symbol.contains("moon") }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .symbolRenderingMode(.multicolor)
+            .font(.system(size: size, weight: .medium))
+            .rotationEffect(.degrees(spins && phase ? 360 : 0))
+            .offset(x: drifts && phase ? 2.5 : drifts ? -2.5 : 0, y: falls && phase ? 1.2 : 0)
+            .opacity(twinkles && phase ? 0.75 : 1)
+            .brightness(flash ? 0.55 : 0)
+            .shadow(color: storms && flash ? Color.yellow.opacity(0.8) : .clear, radius: 6)
+            .scaleEffect(appeared ? 1 : 0.4)
+            .rotationEffect(.degrees(appeared ? 0 : -40))
+            .onAppear(perform: start)
+    }
+
+    private func start() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let loop: Animation = spins ? .linear(duration: 24).repeatForever(autoreverses: false)
+            : drifts ? .easeInOut(duration: 2.2).repeatForever(autoreverses: true)
+            : .easeInOut(duration: 1.6).repeatForever(autoreverses: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(loop) { phase = true }
+        }
+        guard storms else { return }
+        // A double flicker every few seconds, while the card is up
+        Task { @MainActor in
+            for wait in [1.2, 3.1, 2.6, 3.4] {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                for _ in 0..<2 {
+                    withAnimation(.easeOut(duration: 0.06)) { flash = true }
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    withAnimation(.easeIn(duration: 0.18)) { flash = false }
+                    try? await Task.sleep(nanoseconds: 110_000_000)
+                }
+            }
+        }
+    }
+}
+
+/// A faint glow in the weather's colour in the top corner of the card
+private struct SkyGlow: View {
+    let symbol: String
+    let appeared: Bool
+    @State private var breathe = false
+
+    private var tint: Color {
+        if symbol.contains("bolt") { return Color(red: 0.55, green: 0.45, blue: 1.0) }
+        if symbol.contains("rain") || symbol.contains("drizzle") { return Color(red: 0.35, green: 0.6, blue: 1.0) }
+        if symbol.contains("snow") { return Color(red: 0.75, green: 0.88, blue: 1.0) }
+        if symbol.contains("moon") || symbol.contains("stars") { return Color(red: 0.45, green: 0.45, blue: 0.95) }
+        if symbol.contains("cloud") || symbol.contains("fog") { return Color(red: 0.7, green: 0.75, blue: 0.85) }
+        return Color(red: 1.0, green: 0.7, blue: 0.3)
+    }
+
+    var body: some View {
+        RadialGradient(colors: [tint.opacity(0.32), tint.opacity(0)], center: .center, startRadius: 0, endRadius: 110)
+            .frame(width: 220, height: 220)
+            .scaleEffect(breathe ? 1.12 : 0.9)
+            .opacity(appeared ? 1 : 0)
+            .animation(.easeOut(duration: 0.8), value: appeared)
+            .onAppear {
+                guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+                withAnimation(.easeInOut(duration: 3).repeatForever(autoreverses: true)) { breathe = true }
+            }
     }
 }
