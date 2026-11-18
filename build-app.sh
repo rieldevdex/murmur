@@ -12,6 +12,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Murmur "$APP/Contents/MacOS/Murmur"
 cp Info.plist "$APP/Contents/Info.plist"
 
+# Pages and other files the app uses (the planner)
+if [ -d Resources ]; then
+    cp -R Resources/. "$APP/Contents/Resources/"
+fi
+
 # App icon: turn Icon.png (1024 x 1024) into the .icns file macOS expects.
 # To use your own icon, replace Icon.png with any square PNG and rebuild.
 if [ -f Icon.png ]; then

@@ -111,17 +111,24 @@ struct NotchMetrics {
     static func expandedExtra(tab: IslandTab, lyrics: Bool) -> CGFloat {
         switch tab {
         case .music: return 231
-        case .shelf: return 134
-        case .timer: return max(132, CGFloat(IslandExtras.timerPresetRows) * 54 + 14)
+        // The dictionary needs room for a definition under the search box
+        case .shelf: return UserDefaults.standard.string(forKey: "shelfMode") == "dictionary" ? 196 : 134
+        // Today: the task list (or the full timer, when switched to it)
+        case .today:
+            return UserDefaults.standard.string(forKey: "todayMode") == "timer"
+                ? max(132, CGFloat(IslandExtras.timerPresetRows) * 54 + 14) : 214
         case .system: return 184
         }
     }
 
     /// The island's body size for each state, not counting the top flares
-    func islandSize(_ mode: IslandMode, lyrics: Bool = false, tab: IslandTab = .music) -> CGSize {
+    func islandSize(_ mode: IslandMode, lyrics: Bool = false, tab: IslandTab = .music,
+                    timerInIsland given: Bool? = nil) -> CGSize {
         // Room for the ring and "59:59" (or "1:02:03") beside the notch, clear of the camera
-        // With music playing too, the timer moves into its own bubble instead (liquid split)
-        let timerInIsland = IslandExtras.timerActive && !(IslandExtras.musicActive && Extras.split)
+        // With music playing too, the timer moves into its own bubble instead (liquid split).
+        // The island view passes its own answer, so the width changes in the same animation as the
+        // timer moving in or out (the shared flags only catch up a frame later)
+        let timerInIsland = given ?? (IslandExtras.timerActive && !(IslandExtras.musicActive && Extras.split))
         let sideEar = timerInIsland ? max(ear, IslandExtras.timerLong ? 104 : 86) : ear
         let compact = CGSize(width: notch.width + sideEar * 2, height: notch.height)
         switch mode {
@@ -269,7 +276,7 @@ enum IslandActivity: Equatable {
 }
 
 enum IslandTab: Equatable {
-    case music, shelf, timer, system
+    case music, today, shelf, system
 }
 
 final class NotchState: ObservableObject {
@@ -312,13 +319,18 @@ enum IslandMotion {
     static var close: Animation { Motion.spring(0.42, 0.9) }
     static var hover: Animation { Motion.spring(0.3, 0.7) }
     static var preview: Animation { Motion.spring(0.48, 0.8) }
+    /// The timer joining the island or budding off it: no overshoot, so the island never dips inwards
+    static var merge: Animation { Motion.spring(0.5, 0.92) }
 }
 
 // MARK: - Window
 
 /// A panel that is allowed to sit over the menu bar and never takes keyboard focus
 final class NotchPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    /// Only while the dictionary search is open, so you can type into it; otherwise the island
+    /// never takes the keyboard from the app you're using
+    static var acceptsTyping = false
+    override var canBecomeKey: Bool { Self.acceptsTyping }
     override var canBecomeMain: Bool { false }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
@@ -360,6 +372,7 @@ final class NotchController {
     private weak var tap: AudioTap?
 
     private var leftAt: Date?
+    private var typingReturnApp: NSRunningApplication?
     private var previewUntil = Date.distantPast
     private var hoverPreview = false
 
@@ -500,8 +513,9 @@ final class NotchController {
             NotchController.shared.listeningChanged(mode)
         }
         Greeter.shared.show = { g in
+            guard NotchController.shared.show(.greeting(g), for: 9) else { return false }
             NotchController.haptic(.levelChange)
-            NotchController.shared.show(.greeting(g), for: 8)
+            return true
         }
         PowerWatcher.shared.onChange = { info in
             Task { @MainActor in NotchController.shared.powerChanged(info) }
@@ -574,6 +588,7 @@ final class NotchController {
         if HearingMonitor.enabled { HearingMonitor.shared.start() } else { HearingMonitor.shared.stop() }
         if ListeningModeWatcher.enabled { ListeningModeWatcher.shared.start() } else { ListeningModeWatcher.shared.stop() }
         ClaudeBridge.shared.setEnabled(ClaudeBridge.enabled)
+        DictionaryHotKey.setEnabled(DictionaryHotKey.enabled)
         updateMonitor()
     }
 
@@ -701,16 +716,51 @@ final class NotchController {
         panel?.ignoresMouseEvents = false
     }
 
+    // MARK: Dictionary search
+
+    /// Opens the island on the dictionary, ready to type (the keyboard shortcut and the menu)
+    func openDictionary() {
+        UserDefaults.standard.set("dictionary", forKey: "shelfMode")
+        if state.expanded {
+            withAnimation(.easeInOut(duration: 0.2)) { state.tab = .shelf }
+        } else {
+            expand(tab: .shelf)
+        }
+        DictionarySearch.shared.focusOnAppear = true
+        DictionarySearch.shared.focusRequest += 1
+    }
+
+    /// Lets the island take the keyboard, without bringing Murmur to the front
+    func beginTyping() {
+        guard let p = panel, !p.isKeyWindow else { return }
+        typingReturnApp = NSWorkspace.shared.frontmostApplication
+        NotchPanel.acceptsTyping = true
+        p.makeKey()
+    }
+
+    /// Hands the keyboard back to the app you were using
+    func endTyping() {
+        guard NotchPanel.acceptsTyping else { return }
+        NotchPanel.acceptsTyping = false
+        if let p = panel, p.isKeyWindow {
+            p.resignKey()
+            if let app = typingReturnApp, app.processIdentifier != getpid() { app.activate() }
+        }
+        typingReturnApp = nil
+    }
+
     // MARK: Activities
 
-    func show(_ activity: IslandActivity, for seconds: Double) {
-        guard panel != nil else { return }
+    /// False when it couldn't be shown right now (island open, a question from Claude Code waiting…)
+    @discardableResult
+    func show(_ activity: IslandActivity, for seconds: Double) -> Bool {
+        guard panel != nil else { return false }
         // A question from Claude Code stays up until it's answered; volume and the like wait
         if case .approval? = state.activity {
-            if case .approval = activity {} else { return }
+            if case .approval = activity {} else { return false }
         }
         if state.expanded {
-            if case .alert = activity {} else { return }
+            if case .alert = activity {} else { return false }
         }
         activityUntil = Date().addingTimeInterval(seconds)
         if let current = state.activity, current.kind == activity.kind {
@@ -719,6 +769,7 @@ final class NotchController {
         } else {
             withAnimation(IslandMotion.preview) { state.activity = activity }
         }
+        return true
     }
 
     func showVolume(_ level: Double, muted: Bool) {
@@ -820,6 +871,7 @@ final class NotchController {
 
     func collapse() {
         guard state.expanded else { return }
+        endTyping()
         state.pinned = false
         ClipboardStore.shared.reading = nil
         leftAt = nil
@@ -1049,7 +1101,8 @@ final class NotchController {
             if mouseDown { leftAt = nil; return }
             // Stay open while the pointer is on it or close by (or while locked open);
             // close shortly after it leaves
-            if state.pinned || rect.insetBy(dx: -16, dy: -16).contains(mouse) {
+            // (also while you're typing a word to look up)
+            if state.pinned || p.isKeyWindow || rect.insetBy(dx: -16, dy: -16).contains(mouse) {
                 leftAt = nil
             } else {
                 if leftAt == nil { leftAt = now }
@@ -1158,7 +1211,8 @@ struct NotchIslandView: View {
     @AppStorage("source") private var sourceIndex = 0
     @AppStorage("notchShelf") private var shelfEnabled = true
     @AppStorage("sysTab") private var systemTabEnabled = true
-    @AppStorage("timerTab") private var timerTabEnabled = true
+    @AppStorage("timerTab") private var timerTabEnabled = true     // now the Today tab
+    @AppStorage("todayMode") private var todayMode = "tasks"
     @AppStorage("shelfMode") private var shelfMode = "files"
     @ObservedObject private var timer = IslandTimer.shared
     @ObservedObject private var clipboard = ClipboardStore.shared
@@ -1200,7 +1254,8 @@ struct NotchIslandView: View {
         let notch = m?.notch ?? CGSize(width: 190, height: 32)
         let flare = CGFloat(NotchDefaults.flare)
         let mode = state.mode(active: active)
-        let size = m?.islandSize(mode, lyrics: showLyricRow, tab: state.tab) ?? notch
+        let size = m?.islandSize(mode, lyrics: showLyricRow, tab: state.tab,
+                                 timerInIsland: timer.isActive && !splitTimer) ?? notch
         let corner = cornerRadius(mode)
         let lifted = mode == .expanded || mode == .preview || mode == .hud || mode == .device
 
@@ -1311,7 +1366,7 @@ struct NotchIslandView: View {
             // The timer's own bubble, pulled out of the island like liquid
             .overlay(alignment: .topTrailing) {
                 if splitTimer && (mode == .compact || mode == .peek) {
-                    TimerBubble(height: notch.height)
+                    TimerBubble(height: notch.height, flare: flare, radius: cornerRadius(.compact))
                         // Only the bubble stretches and settles; it never pulls the island with it
                         .transition(.goo(height: notch.height)
                             .animation(.spring(response: 0.5, dampingFraction: 0.8)))
@@ -1319,7 +1374,7 @@ struct NotchIslandView: View {
                 }
             }
             // The island itself resizes without overshooting, so it never dips inwards
-            .animation(.spring(response: 0.45, dampingFraction: 0.95), value: splitTimer && (mode == .compact || mode == .peek))
+            .animation(IslandMotion.merge, value: splitTimer && (mode == .compact || mode == .peek))
             // A glow in the album's colours that swells with each beat
             .shadow(color: accent.opacity(beatGlow(mode) * 0.7), radius: 9)
             .shadow(color: .black.opacity(lifted ? 0.35 : 0), radius: 24, y: 10)
@@ -1451,7 +1506,13 @@ struct NotchIslandView: View {
             Spacer(minLength: 0)
             if timer.isActive && !splitTimer {
                 TimerEar(height: notch.height)
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    // Flows in from the side the bubble was on (and back out when it buds off again),
+                    // so it reads as the same timer joining the island
+                    .transition(.asymmetric(
+                        insertion: .offset(x: 26).combined(with: .opacity)
+                            .animation(IslandMotion.merge.delay(0.08)),
+                        removal: .offset(x: 26).combined(with: .opacity)
+                            .animation(.easeOut(duration: 0.16))))
             } else if clipboard.pendingDefinition != nil && musicActive {
                 Image(systemName: "character.book.closed.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -1470,6 +1531,8 @@ struct NotchIslandView: View {
         }
         .frame(height: notch.height)
         .animation(Motion.spring(0.35, 0.85), value: timer.isActive)
+        .animation(IslandMotion.merge, value: splitTimer)
+        .animation(IslandMotion.merge, value: musicActive)
         .animation(Motion.spring(0.35, 0.85), value: clipboard.pendingDefinition)
     }
 
@@ -1508,10 +1571,7 @@ struct NotchIslandView: View {
                 switch state.tab {
                 case .system: systemTitle
                 case .shelf: shelfSwitch
-                case .timer:
-                    Text("Timer")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(IslandType.secondary)
+                case .today: todaySwitch
                 case .music: Text("")
                 }
                 Spacer(minLength: notch.width + 12)
@@ -1541,7 +1601,9 @@ struct NotchIslandView: View {
                         .transition(.opacity.combined(with: .move(edge: .leading)))
                 case .shelf:
                     Group {
-                        if shelfMode == "clipboard" && !dropTargeted {
+                        if shelfMode == "dictionary" && !dropTargeted {
+                            DictionarySearchView()
+                        } else if shelfMode == "clipboard" && !dropTargeted {
                             ClipboardView()
                         } else {
                             ShelfView(accent: accent, targeted: dropTargeted)
@@ -1550,11 +1612,13 @@ struct NotchIslandView: View {
                     .padding(.top, notch.height + 8)
                     .padding(.bottom, 14)
                     .transition(.opacity)
-                case .timer:
-                    TimerTabView()
-                        .padding(.top, notch.height + 8)
-                        .padding(.bottom, 14)
-                        .transition(.opacity)
+                case .today:
+                    Group {
+                        if todayMode == "timer" { TimerTabView() } else { TodayView() }
+                    }
+                    .padding(.top, notch.height + 8)
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
                 case .system:
                     SystemTabView()
                         .padding(.top, notch.height + 8)
@@ -1626,34 +1690,20 @@ struct NotchIslandView: View {
                 Button("Clear Clipboard History") { clipboard.clear() }
             } else if state.tab == .shelf && !ShelfStore.shared.items.isEmpty {
                 Button("Clear Shelf") { ShelfStore.shared.clear() }
-            } else if state.tab == .timer {
+            } else if state.tab == .today && todayMode == "timer" {
                 Button("Edit Timer Presets…") { TimerTabView.editPresets() }
             }
-            Menu("Quick Settings") {
-                Toggle("Headphone Level (dB)", isOn: quick("funHearing", true))
-                Toggle("Noise Control Animation", isOn: quick("funListening", true))
-                Toggle("Keyboard Language Badge", isOn: quick("funInput", true))
-                Toggle("Screenshot Catcher", isOn: quick("funShots", true))
-                Divider()
-                Toggle("Beat Pulse", isOn: quick("funPulse", true))
-                Toggle("Cover Flip", isOn: quick("funFlip", true))
-                Toggle("Timer Bubble", isOn: quick("funSplit", true))
-                Toggle("Jelly Motion", isOn: quick("funJelly", true))
-                Toggle("Eyes", isOn: quick("funEyes", false))
-                Divider()
-                Button("Calibrate Headphone Level…") {
-                    NotchController.shared.collapse()
-                    SettingsWindow.shared.show(tab: "Extras")
-                }
+            Divider()
+            // Everything you switch on or off lives in Settings now; this menu is for doing things
+            Button(state.pinned ? "Unpin" : "Pin Open") { togglePin() }
+            Button("Look Up a Word\u{2026}  \u{2303}\u{2325}D") {
+                NotchController.shared.openDictionary()
             }
-            Button("System Monitor (Full Screen)") {
+            Button("Open Planner") {
                 NotchController.shared.collapse()
-                SystemDashboard.shared.show()
+                PlannerWindow.shared.show()
             }
-            Button("Hearing History…") {
-                NotchController.shared.collapse()
-                HearingWindow.shared.show()
-            }
+            Divider()
             Button("Settings…") {
                 NotchController.shared.collapse()
                 SettingsWindow.shared.show()
@@ -1766,8 +1816,8 @@ struct NotchIslandView: View {
         HStack(spacing: compact ? 0 : 2) {
             if hasTabs {
                 tabIcon(.music, "music.note", compact: compact)
+                if timerTabEnabled { tabIcon(.today, "checklist", compact: compact) }
                 if shelfEnabled { tabIcon(.shelf, "tray.full.fill", compact: compact) }
-                if timerTabEnabled { tabIcon(.timer, "timer", compact: compact) }
                 if systemTabEnabled { tabIcon(.system, "cpu", compact: compact) }
             }
             moreMenu(compact: compact)
@@ -1776,16 +1826,45 @@ struct NotchIslandView: View {
         .background(Capsule().fill(Color.white.opacity(0.08)))
     }
 
+    /// Tasks or Timer, in the ear beside the notch
+    private var todaySwitch: some View {
+        HStack(spacing: 10) {
+            todayOption("Tasks", "tasks")
+            todayOption("Timer", "timer")
+        }
+    }
+
+    private func todayOption(_ title: String, _ value: String) -> some View {
+        let on = todayMode == value
+        return Button {
+            NotchController.haptic(.generic)
+            withAnimation(.easeInOut(duration: 0.2)) { todayMode = value }
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                if value == "timer" && timer.isActive && !on {
+                    Circle().fill(TimerColour.of(timer.phase)).frame(width: 5, height: 5)
+                }
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(on ? Color.white : IslandType.tertiary)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     /// Files or Clipboard, in the ear beside the notch
     private var shelfSwitch: some View {
         HStack(spacing: 10) {
             shelfOption("Files", "files")
             if clipboard.historyOn { shelfOption("Clipboard", "clipboard") }
+            shelfOption("Dictionary", "dictionary")
         }
     }
 
     private func shelfOption(_ title: String, _ value: String) -> some View {
-        let on = shelfMode == value || (!clipboard.historyOn && value == "files")
+        let on = shelfMode == value || (!clipboard.historyOn && value == "files" && shelfMode == "clipboard")
         return Button {
             NotchController.haptic(.generic)
             withAnimation(.easeInOut(duration: 0.2)) { shelfMode = value }

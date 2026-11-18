@@ -227,6 +227,7 @@ struct NotchSettings: View {
     @AppStorage("timerSound") private var timerSound = true
     @AppStorage("clipHistory") private var clipHistory = true
     @AppStorage("clipDefine") private var clipDefine = true
+    @AppStorage("dictHotKey") private var dictHotKey = true
     @AppStorage("notchPower") private var power = true
     @AppStorage("notchSwipe") private var swipe = true
     @AppStorage("notchScrollVolume") private var scrollVolume = true
@@ -276,6 +277,11 @@ struct NotchSettings: View {
                         Text("Look up copied words")
                         Text("Copy a word, then point at the notch to see what it means.")
                     }
+                    Toggle(isOn: $dictHotKey) {
+                        Text("Look up any word with \u{2303}\u{2325}D")
+                        Text("Opens a search box in the notch from any app. Also in the Shelf, under Dictionary.")
+                    }
+                    .onChange(of: dictHotKey) { on in DictionaryHotKey.setEnabled(on) }
                     if !ClipboardStore.shared.items.isEmpty {
                         Button("Clear Clipboard History") { ClipboardStore.shared.clear() }
                     }
@@ -630,7 +636,7 @@ struct TimerSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Timer tab in the island", isOn: $timerTab)
+                Toggle("Today tab in the island (tasks and the timer)", isOn: $timerTab)
                 Toggle("Pause music during breaks (repeating presets)", isOn: $pauseMusic)
                 Toggle("Play a sound when time's up", isOn: $sound)
             }

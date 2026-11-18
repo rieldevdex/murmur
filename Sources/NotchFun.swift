@@ -81,8 +81,11 @@ extension AnyTransition {
 // MARK: - Liquid split: the timer as its own bubble
 
 enum BubbleLayout {
-    static let gap: CGFloat = 7
-    static let width: CGFloat = 70
+    /// From the island's edge to the timer's own (equal to the curve where each meets the bezel, so the
+    /// two curves just touch at the top of the screen and leave a smooth valley between them)
+    static let gap: CGFloat = 8
+    /// Including the timer's own curves into the bezel on each side
+    static let width: CGFloat = 86
 }
 
 /// The bridge of "liquid" between the island and the bubble, which thins and lets go
@@ -103,7 +106,7 @@ struct GooModifier: ViewModifier, Animatable {
         ZStack(alignment: .leading) {
             GooBridge(separation: s)
                 .fill(Color.black)
-                .frame(width: BubbleLayout.gap + height * 0.6, height: height)
+                .frame(width: BubbleLayout.gap + height * 0.9, height: height)
                 .opacity(Double(1 - max(0, s - 0.55) / 0.45))
             content
                 .offset(x: BubbleLayout.gap - (1 - s) * travel)
@@ -121,11 +124,12 @@ struct GooBridge: Shape {
     }
 
     func path(in r: CGRect) -> Path {
-        // Top and bottom edges pinch towards the middle as the bubble pulls away
-        let pinch = r.height * 0.55 * min(1, separation * 1.4)
+        // Both hang from the top of the screen, so the top stays flat against the bezel and only
+        // the bottom edge draws up as the timer pulls away, like a drip thinning before it lets go
+        let pinch = r.height * 0.95 * min(1, separation * 1.3)
         var p = Path()
         p.move(to: CGPoint(x: r.minX, y: r.minY))
-        p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY), control: CGPoint(x: r.midX, y: r.minY + pinch))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
         p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
         p.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY), control: CGPoint(x: r.midX, y: r.maxY - pinch))
         p.closeSubpath()
@@ -140,22 +144,38 @@ extension AnyTransition {
     }
 }
 
+/// The timer beside the island while music plays: a second, smaller notch hanging from the top of the
+/// screen, with the island's flat top, its bottom corners and its curves into the bezel
 struct TimerBubble: View {
     @ObservedObject var timer = IslandTimer.shared
     let height: CGFloat
+    var flare: CGFloat = CGFloat(NotchDefaults.flare)
+    var radius: CGFloat = 10
 
     var body: some View {
+        let shape = NotchShape(flare: flare, radius: radius)
         Button {
-            NotchController.shared.expand(tab: .timer)
+            UserDefaults.standard.set("timer", forKey: "todayMode")
+            NotchController.shared.expand(tab: .today)
         } label: {
             TimerEar(height: height)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, flare + 7)
                 .frame(width: BubbleLayout.width, height: height)
-                .background(Capsule().fill(Color.black))
-                .contentShape(Capsule())
+                .background(shape.fill(Color.black))
+                .contentShape(shape)
         }
-        .buttonStyle(PressableStyle())
+        // Pressing squashes it from the top, like the island, instead of shrinking it off the bezel
+        .buttonStyle(HangingPressStyle())
         .help("Open the timer")
+    }
+}
+
+/// A press that keeps the top edge against the screen
+struct HangingPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(x: configuration.isPressed ? 0.96 : 1, y: configuration.isPressed ? 0.92 : 1, anchor: .top)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }
 
@@ -561,9 +581,22 @@ struct Greeting: Equatable {
 @MainActor
 final class Greeter {
     static let shared = Greeter()
-    var show: ((Greeting) -> Void)?
+    /// Shows the greeting; false if the island couldn't show it just then
+    var show: ((Greeting) -> Bool)?
     private var observers: [NSObjectProtocol] = []
+    private var unlockObserver: NSObjectProtocol?
+    private var check: Timer?
+    private var greeting = false
     private let store = EKEventStore()
+
+    // The greeting used to be missed when:
+    // • the Mac woke to the Lock Screen: it played there, unseen, and the day was used up;
+    // • the Mac never slept (plugged in overnight), so no wake event came at all;
+    // • you'd used the Mac just after midnight, which counted as "first today";
+    // • the island was open or busy at that moment.
+    // Now it waits until you've unlocked and are actually using the Mac, a new day starts at 4 am,
+    // a check every few minutes catches a Mac that never slept, and the day only counts once the
+    // greeting has really been shown.
 
     func start() {
         guard observers.isEmpty else { return }
@@ -574,40 +607,81 @@ final class Greeter {
                 Task { @MainActor in Greeter.shared.greetIfFirstToday(after: 2) }
             })
         }
+        unlockObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { _ in
+            Task { @MainActor in Greeter.shared.greetIfFirstToday(after: 1.5) }
+        }
+        check = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { _ in
+            Task { @MainActor in Greeter.shared.greetIfFirstToday(after: 0) }
+        }
+        check?.tolerance = 30
         greetIfFirstToday(after: 3)
     }
 
     func stop() {
         for o in observers { NSWorkspace.shared.notificationCenter.removeObserver(o) }
         observers = []
+        if let u = unlockObserver { DistributedNotificationCenter.default().removeObserver(u) }
+        unlockObserver = nil
+        check?.invalidate()
+        check = nil
     }
 
-    /// Once per day, the first time the Mac is in use
+    /// Once per day, the first time you're actually at the Mac
     func greetIfFirstToday(after seconds: Double) {
-        guard Extras.greeting else { return }
-        let today = Self.dayKey(Date())
-        guard UserDefaults.standard.string(forKey: "greetLastDay") != today else { return }
-        UserDefaults.standard.set(today, forKey: "greetLastDay")
+        guard Extras.greeting, !greeting else { return }
+        guard UserDefaults.standard.string(forKey: "greetLastDay") != Self.dayKey(Date()) else { return }
+        greeting = true
         Task { @MainActor in
+            defer { self.greeting = false }
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            await self.greet()
+            // Not while locked or away: the unlock (or the next check) brings it back
+            guard Self.present else { return }
+            let g = await self.build()
+            // Island busy (open, or a question waiting): try again shortly
+            for attempt in 0..<6 {
+                guard Self.present else { return }
+                if self.show?(g) == true {
+                    UserDefaults.standard.set(Self.dayKey(Date()), forKey: "greetLastDay")
+                    return
+                }
+                if attempt < 5 { try? await Task.sleep(nanoseconds: 20_000_000_000) }
+            }
         }
     }
 
-    /// Builds the greeting (one weather request at most) and shows it
+    /// Unlocked, and the keyboard, mouse or trackpad used in the last two minutes
+    static var present: Bool {
+        if let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+           (session["CGSSessionScreenIsLocked"] as? Bool) == true { return false }
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        return idle < 120
+    }
+
+    /// Builds the greeting and shows it (from Settings' "Show Me Now")
     func greet() async {
+        _ = show?(await build())
+    }
+
+    private func build() async -> Greeting {
         let hour = Calendar.current.component(.hour, from: Date())
-        let part = hour < 5 ? "Good evening" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
+        let part = hour < 4 ? "Good evening" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
         let name = Self.name
         var g = Greeting(title: name.isEmpty ? part : "\(part), \(name)",
                          symbol: hour >= 6 && hour < 18 ? "sun.horizon.fill" : "moon.stars.fill")
-        if let w = await Weather.today() {
+        // Just after waking the network is often still connecting: one more try a moment later
+        var w = await Weather.today()
+        if w == nil, !(UserDefaults.standard.string(forKey: "greetCity") ?? "").isEmpty {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            w = await Weather.today()
+        }
+        if let w = w {
             g.symbol = w.symbol
             g.temperature = w.now
             g.weather = w.summary
         }
         g.event = firstEvent()
-        show?(g)
+        return g
     }
 
     static var name: String {
@@ -615,8 +689,9 @@ final class Greeter {
         return NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
     }
 
+    /// A "day" runs from 4 am to 4 am, so working past midnight doesn't use up tomorrow's greeting
     private static func dayKey(_ d: Date) -> String {
-        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d.addingTimeInterval(-4 * 3600))
         return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
     }
 
@@ -635,6 +710,9 @@ final class Greeter {
             store.requestAccess(to: .event) { ok, _ in DispatchQueue.main.async { done(ok) } }
         }
     }
+
+    /// For the Today tab
+    func nextEventText() -> String? { firstEvent() }
 
     /// The next timed event today, e.g. "IELTS class at 8:00"
     private func firstEvent() -> String? {
