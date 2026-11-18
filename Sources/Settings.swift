@@ -727,6 +727,7 @@ struct ExtrasSettings: View {
     @AppStorage("greetName") private var name = Greeter.name
     @AppStorage("greetCity") private var city = ""
     @AppStorage("greetEvents") private var events = false
+    @AppStorage("greetTasks") private var greetTasks = true
     @State private var calendarDenied = false
     @State private var hideSystemIndicator = SystemInputIndicator.hidden
     @AppStorage("funHearing") private var hearing = true
@@ -919,6 +920,7 @@ struct ExtrasSettings: View {
                 Group {
                     TextField("Your name", text: $name)
                     TextField("City for the weather", text: $city, prompt: Text("e.g. Ho Chi Minh City"))
+                    Toggle("Include my most urgent tasks for today", isOn: $greetTasks)
                     Toggle("Include my next event today", isOn: $events)
                         .onChange(of: events) { on in
                             guard on, !Greeter.calendarAllowed else { return }

@@ -287,8 +287,12 @@ private struct TaskRow: View {
         .onHover { hovering = $0 }
     }
 
-    /// The planner's colours for urgency
-    static func band(_ u: Int) -> Color {
+    static func band(_ u: Int) -> Color { UrgencyColour.of(u) }
+}
+
+/// The planner's colours for urgency (9–10 red, 7–8 orange, 4–6 amber, 1–3 grey)
+enum UrgencyColour {
+    static func of(_ u: Int) -> Color {
         u >= 9 ? Color(red: 0.78, green: 0.19, blue: 0.17)
             : u >= 7 ? Color(red: 0.83, green: 0.40, blue: 0.16)
             : u >= 4 ? Color(red: 0.75, green: 0.56, blue: 0.12)

@@ -576,6 +576,14 @@ struct Greeting: Equatable {
     var temperature: String?
     var weather: String?
     var event: String?
+    /// Today's unfinished tasks from the planner, most urgent first (the first few)
+    var tasks: [PlannerStore.Item] = []
+    var moreTasks = 0
+
+    /// Extra height the card needs for the task list
+    var extraHeight: CGFloat {
+        tasks.isEmpty ? 0 : CGFloat(tasks.count) * 19 + (moreTasks > 0 ? 16 : 0) + 8
+    }
 }
 
 @MainActor
@@ -681,6 +689,12 @@ final class Greeter {
             g.weather = w.summary
         }
         g.event = firstEvent()
+        if UserDefaults.standard.object(forKey: "greetTasks") as? Bool ?? true {
+            PlannerStore.shared.load()
+            let open = PlannerStore.shared.today().filter { !$0.done }   // already most urgent first
+            g.tasks = Array(open.prefix(3))
+            g.moreTasks = max(0, open.count - 3)
+        }
         return g
     }
 
@@ -845,6 +859,45 @@ struct GreetingCard: View {
                     .foregroundStyle(Color.white.opacity(0.8))
                     .lineLimit(1)
                     .padding(.top, 3)
+            }
+            if !greeting.tasks.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(greeting.tasks.enumerated()), id: \.element.id) { i, task in
+                        HStack(spacing: 7) {
+                            Circle()
+                                .strokeBorder(task.colour ?? Color.white.opacity(0.55), lineWidth: 1.5)
+                                .frame(width: 11, height: 11)
+                            Text(task.title)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.92))
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text("\(task.urgency)")
+                                .font(.system(size: 9.5, weight: .bold).monospacedDigit())
+                                .foregroundStyle(Color.white)
+                                .frame(minWidth: 16, minHeight: 14)
+                                .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(UrgencyColour.of(task.urgency)))
+                        }
+                        .frame(height: 16)
+                        .opacity(appeared ? 1 : 0)
+                        .offset(y: appeared ? 0 : 5)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8).delay(0.25 + Double(i) * 0.08),
+                                   value: appeared)
+                    }
+                    if greeting.moreTasks > 0 {
+                        Text("+ \(greeting.moreTasks) more today")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(IslandType.tertiary)
+                    }
+                }
+                .padding(.top, 8)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    UserDefaults.standard.set("tasks", forKey: "todayMode")
+                    NotchController.shared.expand(tab: .today)
+                }
+                .help("Open Today")
             }
             Spacer(minLength: 0)
         }

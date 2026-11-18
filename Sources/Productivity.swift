@@ -12,6 +12,7 @@ enum IslandExtras {
     static var timerLong = false        // an hour or more left: the time beside the notch needs more room
     static var timerPresetRows = 2      // rows of preset buttons in the Timer tab
     static var definitionReady = false
+    static var cardExtra: CGFloat = 0    // extra height for a taller card (the greeting with tasks)
 }
 
 // MARK: - Timer

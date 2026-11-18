@@ -153,7 +153,7 @@ struct NotchMetrics {
         case .device:
             return CGSize(width: max(compact.width + 40, 360), height: notch.height + 62)
         case .alert:
-            return CGSize(width: max(compact.width + 80, 400), height: notch.height + 86)
+            return CGSize(width: max(compact.width + 80, 400), height: notch.height + 86 + IslandExtras.cardExtra)
         case .expanded:
             if tab == .music {
                 return CGSize(width: max(PlayerLayout.width(notch), notch.width + ear * 2),
@@ -513,7 +513,8 @@ final class NotchController {
             NotchController.shared.listeningChanged(mode)
         }
         Greeter.shared.show = { g in
-            guard NotchController.shared.show(.greeting(g), for: 9) else { return false }
+            // A little longer when there are tasks to read
+            guard NotchController.shared.show(.greeting(g), for: 9 + Double(g.tasks.count) * 1.5) else { return false }
             NotchController.haptic(.levelChange)
             return true
         }
@@ -641,6 +642,7 @@ final class NotchController {
         if state.expanded { collapse() }
         Self.haptic(.levelChange)
         activityUntil = Date().addingTimeInterval(ClaudeBridge.wait + 5)
+        IslandExtras.cardExtra = 0
         withAnimation(IslandMotion.preview) { state.activity = .approval(request) }
     }
 
@@ -763,6 +765,7 @@ final class NotchController {
             if case .alert = activity {} else { return false }
         }
         activityUntil = Date().addingTimeInterval(seconds)
+        if case .greeting(let g) = activity { IslandExtras.cardExtra = g.extraHeight } else { IslandExtras.cardExtra = 0 }
         if let current = state.activity, current.kind == activity.kind {
             // Same kind already showing: just update the numbers
             withAnimation(.easeOut(duration: 0.15)) { state.activity = activity }
