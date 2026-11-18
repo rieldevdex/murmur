@@ -409,6 +409,10 @@ final class NotchController {
 
     // Gestures and the file shelf
     private var scrollMonitor: Any?
+    private var scrollGlobalMonitor: Any?
+    /// This two-finger gesture started on the island, so its later events count even if macOS
+    /// delivers them to the menu bar
+    private var scrollOwned = false
     private var scrollX: CGFloat = 0
     private var scrollY: CGFloat = 0
     private var scrollFired = false
@@ -497,16 +501,25 @@ final class NotchController {
             }
 
         // Two-finger swipes and scrolling over the island
+        // Over the closed island, macOS usually hands scrolls to the menu bar rather than to the island,
+        // so they're watched everywhere (like clicks) and kept only when the pointer is on the island
+        let scrollInfo: (NSEvent) -> ScrollInfo = { e in
+            ScrollInfo(dx: e.scrollingDeltaX, dy: e.scrollingDeltaY,
+                       precise: e.hasPreciseScrollingDeltas,
+                       inverted: e.isDirectionInvertedFromDevice,
+                       began: e.phase.contains(.began) || e.phase.contains(.mayBegin),
+                       ended: e.phase.contains(.ended) || e.phase.contains(.cancelled),
+                       momentum: e.momentumPhase != [],
+                       windowNumber: e.windowNumber)
+        }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { e in
-            let info = ScrollInfo(dx: e.scrollingDeltaX, dy: e.scrollingDeltaY,
-                                  precise: e.hasPreciseScrollingDeltas,
-                                  inverted: e.isDirectionInvertedFromDevice,
-                                  began: e.phase.contains(.began) || e.phase.contains(.mayBegin),
-                                  ended: e.phase.contains(.ended) || e.phase.contains(.cancelled),
-                                  momentum: e.momentumPhase != [],
-                                  windowNumber: e.windowNumber)
+            let info = scrollInfo(e)
             Task { @MainActor in NotchController.shared.scrolled(info) }
             return e
+        }
+        scrollGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { e in
+            let info = scrollInfo(e)
+            Task { @MainActor in NotchController.shared.scrolled(info, elsewhere: true) }
         }
 
         volumeWatcher.onChange = { volume, muted in
@@ -691,6 +704,8 @@ final class NotchController {
         clickMonitors = []
         if let m = scrollMonitor { NSEvent.removeMonitor(m) }
         scrollMonitor = nil
+        if let g = scrollGlobalMonitor { NSEvent.removeMonitor(g) }
+        scrollGlobalMonitor = nil
         trackWatch = nil
         volumeWatcher.stop()
         brightnessTimer?.invalidate()
@@ -880,8 +895,16 @@ final class NotchController {
         }
     }
 
-    fileprivate func scrolled(_ e: ScrollInfo) {
-        guard let p = panel, e.windowNumber == p.windowNumber, !e.momentum else { return }
+    fileprivate func scrolled(_ e: ScrollInfo, elsewhere: Bool = false) {
+        guard let p = panel, !e.momentum else { return }
+        if elsewhere || e.windowNumber != p.windowNumber {
+            // Went to another window (the menu bar, usually): only ours if it's on the closed island
+            // (a mouse wheel has no start or end, so each of its clicks is checked on its own)
+            if e.began || !e.precise { scrollOwned = !state.expanded && pointerOnClosedIsland() }
+            guard scrollOwned, !state.expanded else { return }
+        } else if e.began {
+            scrollOwned = true
+        }
         let d = UserDefaults.standard
 
         // Which way the fingers actually moved, whatever the natural-scrolling setting
@@ -993,6 +1016,14 @@ final class NotchController {
         Task { @MainActor in
             withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { self.state.tab = tab }
         }
+    }
+
+    /// The same area that reacts to hovering the closed island
+    private func pointerOnClosedIsland() -> Bool {
+        guard let m = NotchMetrics.current(), let np = np, let tap = tap else { return false }
+        let active = NotchState.isActive(np: np, tap: tap)
+        let rect = m.screenRect(m.islandSize(state.mode(active: active), lyrics: lyricRow, tab: state.tab))
+        return hotRect(m, rect).contains(NSEvent.mouseLocation)
     }
 
     /// Whether the pointer is over the shelf's or clipboard's sideways list, which scrolls instead
